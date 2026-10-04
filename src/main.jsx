@@ -4,6 +4,7 @@ import './styles.css';
 import { loginWithEmail, logoutUser, watchAuth } from './services/auth';
 import { subscribeStudents, createStudent, updateStudentInCloud, deleteStudentInCloud } from './services/students';
 import { subscribeAttendance, saveAttendanceCloud } from './services/attendance';
+import { subscribeFeeRecords, saveFeeRecordCloud, deleteFeeRecordsForStudent } from './services/fees';
 
 const CLASS_OPTIONS = ['Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10'];
 const CLASS_FEE_DEFAULTS = { 'Class 4': 1000, 'Class 5': 1000, 'Class 6': 1000, 'Class 7': 1200, 'Class 8': 1200, 'Class 9': 1500, 'Class 10': 1500 };
@@ -55,6 +56,7 @@ function App() {
   });
   const [studentSync, setStudentSync] = useState({ status: 'idle', message: '' });
   const [attendanceSync, setAttendanceSync] = useState({ status: 'idle', message: '' });
+  const [feeSync, setFeeSync] = useState({ status: 'idle', message: '' });
   const [attendanceRecords, setAttendanceRecords] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('ezee_attendance'));
@@ -183,6 +185,38 @@ function App() {
     return unsubscribe;
   }, [authState.status]);
 
+  useEffect(() => {
+    if (authState.status !== 'signedIn') {
+      setFeeSync({ status: 'idle', message: '' });
+      return undefined;
+    }
+    setFeeSync({ status: 'loading', message: 'Connecting fees to Firebase…' });
+    const unsubscribe = subscribeFeeRecords(
+      async (nextRecords) => {
+        setFeeRecords((current) => {
+          if (!nextRecords.length && current.length) return current;
+          return nextRecords;
+        });
+        const local = (() => { try { const value = JSON.parse(localStorage.getItem('ezee_fee_records')); return Array.isArray(value) ? value : []; } catch { return []; } })();
+        const migrationKey = 'ezee_fee_records_cloud_migrated_v1';
+        if (!nextRecords.length && local.length && !localStorage.getItem(migrationKey)) {
+          try {
+            await Promise.all(local.map((record) => saveFeeRecordCloud(record, authState.user.uid)));
+            localStorage.setItem(migrationKey, '1');
+          } catch (error) {
+            console.error('Fee records migration error', error);
+          }
+        }
+        setFeeSync({ status: 'synced', message: 'Fee records cloud synced in real time' });
+      },
+      (error) => {
+        console.error('Fee sync error', error);
+        setFeeSync({ status: 'error', message: 'Could not sync fees. Check Firestore Rules.' });
+      }
+    );
+    return unsubscribe;
+  }, [authState.status]);
+
   const login = async (email, password) => loginWithEmail(email, password);
   const logout = async () => { await logoutUser(); setScreen('home'); };
 
@@ -220,6 +254,7 @@ function App() {
         const next = { ...attendanceRecords };
         Object.keys(next).forEach(key => { delete next[key][id]; });
         setAttendanceRecords(next);
+        await deleteFeeRecordsForStudent(id);
         setFeeRecords(records => records.filter(r => r.studentId !== id));
       } catch (error) {
         console.error(error);
@@ -253,7 +288,7 @@ function App() {
         {screen === 'home' ? <Dashboard dateText={dateText} timeText={timeText} students={students} attendanceStats={attendanceStatsByStudent} attendanceAverage={attendanceAverage} feeRecords={feeRecords} onNavigate={setScreen} /> :
          screen === 'students' ? <StudentsPage students={students} attendanceStats={attendanceStatsByStudent} view={studentView} selectedStudentId={selectedStudentId} onView={openStudent} onEdit={openStudentEdit} onDelete={deleteStudent} onBack={() => { setStudentView('list'); setSelectedStudentId(null); }} onAdd={() => { setModal('add'); setSelectedStudentId(null); }} sync={studentSync} /> :
          screen === 'attendance' ? <AttendancePage students={students} attendanceRecords={attendanceRecords} setAttendanceRecords={setAttendanceRecords} prefs={attendancePrefs} updatePrefs={updateAttendancePrefs} onBack={() => setScreen('home')} onPrint={setPrintReport} userId={authState.user?.uid} sync={attendanceSync} /> :
-         screen === 'fees' ? <FeeManager students={students} setStudents={setStudents} feeRecords={feeRecords} setFeeRecords={setFeeRecords} prefs={feePrefs} setPrefs={setFeePrefs} feeModal={feeModal} setFeeModal={setFeeModal} /> :
+         screen === 'fees' ? <FeeManager students={students} feeRecords={feeRecords} prefs={feePrefs} setPrefs={setFeePrefs} feeModal={feeModal} setFeeModal={setFeeModal} userId={authState.user?.uid} sync={feeSync} /> :
          screen === 'tests' ? <TestsPage tests={tests} setTests={setTests} testAttempts={testAttempts} questionBank={questionBank} setQuestionBank={setQuestionBank} testBuilderOpen={testBuilderOpen} setTestBuilderOpen={setTestBuilderOpen} editingTestId={editingTestId} setEditingTestId={setEditingTestId} /> :
          screen === 'profile' ? <Profile onLogout={logout} profile={authState.profile} user={authState.user} /> :
          <ModulePlaceholder screen={screen} onBack={() => setScreen('home')} />}
@@ -513,7 +548,7 @@ function MonthlyAttendanceReport({ data, prefs, updatePrefs, onDownload, onShare
 }
 function MetricCell({ label, value, tone }) { return <div className={`metric-cell ${tone || ''}`}><small>{label}</small><strong>{value}</strong></div>; }
 
-function FeeManager({ students, setStudents, feeRecords, setFeeRecords, prefs, setPrefs, feeModal, setFeeModal }) {
+function FeeManager({ students, feeRecords, prefs, setPrefs, feeModal, setFeeModal, userId, sync }) {
   const [selectedStudentId, setSelectedStudentId] = useState(null);
   const [receiptDraft, setReceiptDraft] = useState(null);
   const [query, setQuery] = useState('');
@@ -535,7 +570,7 @@ function FeeManager({ students, setStudents, feeRecords, setFeeRecords, prefs, s
 
   const collect = (student) => setFeeModal({ type: 'collect', studentId: student.id, month: prefs.month });
   const editFee = (student) => { setSelectedStudentId(student.id); setFeeModal({ type: 'profile', studentId: student.id }); };
-  const savePayment = (payload) => {
+  const savePayment = async (payload) => {
     const baseFee = Number(payload.student.monthlyFee || CLASS_FEE_DEFAULTS[payload.student.className] || 0);
     const discount = Number(payload.student.discount || 0);
     const netFee = Math.max(0, baseFee - discount);
@@ -544,14 +579,26 @@ function FeeManager({ students, setStudents, feeRecords, setFeeRecords, prefs, s
     const amount = Math.min(balanceBefore, Math.max(0, Number(payload.amount) || 0));
     if (!amount || amount > balanceBefore) return;
     const payment = { id: `PAY-${Date.now()}`, studentId: payload.student.id, month: payload.month, amount, paymentMethod: payload.paymentMethod, date: payload.date, teacher: payload.teacher, receiptNo: payload.receiptNo, note: payload.note || '', baseFee, discount, netFee, balanceAfter: Math.max(0, netFee - currentPaid - amount) };
-    setFeeRecords(prev => [...prev, payment]);
-    setStudents(prev => prev.map(s => s.id === payload.student.id ? { ...s, fee: currentPaid + amount >= netFee ? 'Paid' : 'Partial' } : s));
-    setFeeModal(null);
-    setReceiptDraft({ payment, student: payload.student });
+    try {
+      await saveFeeRecordCloud(payment, userId);
+      setFeeModal(null);
+      setReceiptDraft({ payment, student: payload.student });
+    } catch (error) {
+      console.error('Fee payment save error', error);
+      window.alert('Payment could not be saved to Firebase. Please check Firestore Rules and try again.');
+    }
   };
-  const saveProfileFee = (payload) => {
-    setStudents(prev => prev.map(s => s.id === payload.studentId ? { ...s, monthlyFee: Math.max(0, Number(payload.monthlyFee) || 0), discount: Math.max(0, Number(payload.discount) || 0) } : s));
-    setFeeModal(null);
+  const saveProfileFee = async (payload) => {
+    const student = students.find(s => s.id === payload.studentId);
+    if (!student) return;
+    const nextStudent = { ...student, monthlyFee: Math.max(0, Number(payload.monthlyFee) || 0), discount: Math.max(0, Number(payload.discount) || 0) };
+    try {
+      await updateStudentInCloud(nextStudent, userId);
+      setFeeModal(null);
+    } catch (error) {
+      console.error('Fee profile save error', error);
+      window.alert('Fee profile could not be saved to Firebase. Please check Firestore Rules and try again.');
+    }
   };
   const printReceipt = (payment, student) => { setReceiptDraft({ payment, student }); document.body.classList.add('printing-receipt'); setTimeout(() => window.print(), 100); };
   const shareReceipt = async (payment, student) => {
@@ -562,7 +609,7 @@ function FeeManager({ students, setStudents, feeRecords, setFeeRecords, prefs, s
   const currentTransactions = feeRecords.filter(r => r.month === prefs.month && monthStudents.some(s => s.id === r.studentId)).sort((a,b) => String(b.date).localeCompare(String(a.date)));
 
   return <section className="fees-page">
-    <div className="page-heading"><div><div className="eyebrow"><span className="dot" /> FEE MANAGER</div><h1>Fees</h1><p>Monthly collection, student-wise dues and branded receipts.</p></div><button className="primary-btn add-btn" onClick={() => setFeeModal({ type: 'collect', studentId: monthStudents[0]?.id || null, month: prefs.month })} disabled={!monthStudents.length}><ReceiptIcon /> Collect fee</button></div>
+    <div className="page-heading"><div><div className="eyebrow"><span className="dot" /> FEE MANAGER</div><h1>Fees</h1><p>Monthly collection, student-wise dues and branded receipts.</p><div className={`sync-pill ${sync?.status || 'idle'}`}><CheckCircleIcon /> {sync?.message || 'Fee cloud ready'}</div></div><button className="primary-btn add-btn" onClick={() => setFeeModal({ type: 'collect', studentId: monthStudents[0]?.id || null, month: prefs.month })} disabled={!monthStudents.length}><ReceiptIcon /> Collect fee</button></div>
     <div className="fee-summary-grid">
       <MiniStat value={`₹${money(totalDue)}`} label="Monthly net due" icon={<WalletIcon />} />
       <MiniStat value={`₹${money(totalPaid)}`} label="Collected" icon={<CheckCircleIcon />} />
