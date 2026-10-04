@@ -1,32 +1,32 @@
-# EZEE VISION CHAMPUA — Phase 1
+# EZEE VISION CHAMPUA — Phase 2
 
-Premium app-first foundation for the new coaching + student learning platform.
+Premium app-first Student Management module built on the Phase 1 foundation.
 
-## Included in Phase 1
-- App-first responsive UI
-- Premium design system
-- Login screen (demo/local only)
-- Teacher/Admin dashboard shell
-- Live date and time
-- Quick actions
-- Module navigation shell for Students, Attendance, Fees and Tests
-- Profile screen
-- Light/dark theme toggle
-- PWA manifest for future APK conversion
-- No backend yet — intentional for Phase 1
+## Phase 2 scope
+- Official EZEE VISION logo integrated
+- Student dashboard/list with search and filters
+- Add student flow with generated Student ID
+- Edit student flow
+- Delete student flow with confirmation
+- Student detail/profile screen
+- Class and batch assignment
+- Fee status + attendance snapshot
+- Active/inactive records
+- Local persistence via localStorage
+- Dashboard stats linked to student records
+- Mobile-first app UI designed for later APK conversion
+- Dark mode preserved
+
+## Data
+The student module currently uses localStorage (`ezee_students`) intentionally. Firebase/cloud sync can be introduced after the core modules are polished.
 
 ## Run
-
 ```bash
 npm install
 npm run dev
 ```
 
 ## Build
-
 ```bash
 npm run build
 ```
-
-## Next phase
-Student Management should be built next, without changing the core visual system unless a design refinement is needed.
