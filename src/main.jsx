@@ -5,6 +5,9 @@ import { loginWithEmail, logoutUser, watchAuth } from './services/auth';
 import { subscribeStudents, createStudent, updateStudentInCloud, deleteStudentInCloud } from './services/students';
 import { subscribeAttendance, saveAttendanceCloud } from './services/attendance';
 import { subscribeFeeRecords, saveFeeRecordCloud, deleteFeeRecordsForStudent } from './services/fees';
+import { subscribeTests, saveTestCloud, deleteTestCloud, getTestCloud } from './services/tests';
+import { subscribeQuestionBank, saveQuestionBankCloud, deleteQuestionBankCloud } from './services/questionBank';
+import { subscribeTestAttempts, saveTestAttemptCloud, savePublicScore, getPublicScores } from './services/testAttempts';
 
 const CLASS_OPTIONS = ['Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10'];
 const CLASS_FEE_DEFAULTS = { 'Class 4': 1000, 'Class 5': 1000, 'Class 6': 1000, 'Class 7': 1200, 'Class 8': 1200, 'Class 9': 1500, 'Class 10': 1500 };
@@ -57,6 +60,7 @@ function App() {
   const [studentSync, setStudentSync] = useState({ status: 'idle', message: '' });
   const [attendanceSync, setAttendanceSync] = useState({ status: 'idle', message: '' });
   const [feeSync, setFeeSync] = useState({ status: 'idle', message: '' });
+  const [testSync, setTestSync] = useState({ status: 'idle', message: '' });
   const [attendanceRecords, setAttendanceRecords] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('ezee_attendance'));
@@ -217,6 +221,77 @@ function App() {
     return unsubscribe;
   }, [authState.status]);
 
+  useEffect(() => {
+    if (authState.status !== 'signedIn') {
+      setTestSync({ status: 'idle', message: '' });
+      return undefined;
+    }
+    setTestSync({ status: 'loading', message: 'Connecting tests to Firebase…' });
+    const unsubTests = subscribeTests(
+      async (nextTests) => {
+        const local = loadStoredArray('ezee_tests');
+        const migrationKey = 'ezee_tests_cloud_migrated_v1';
+        if (!nextTests.length && local.length && !localStorage.getItem(migrationKey)) {
+          try {
+            await Promise.all(local.map(test => saveTestCloud(test, authState.user.uid)));
+            localStorage.setItem(migrationKey, '1');
+          } catch (error) {
+            console.error('Tests migration error', error);
+          }
+        }
+        setTests(current => (!nextTests.length && local.length && !localStorage.getItem(migrationKey) ? current : nextTests));
+        setTestSync(prev => ({ ...prev, status: 'synced', message: 'Tests, question bank and attempts cloud synced' }));
+      },
+      (error) => {
+        console.error('Tests sync error', error);
+        setTestSync({ status: 'error', message: 'Could not sync tests. Check Firestore Rules.' });
+      }
+    );
+    const unsubBank = subscribeQuestionBank(
+      async (nextBank) => {
+        const local = loadStoredArray('ezee_question_bank');
+        const migrationKey = 'ezee_question_bank_cloud_migrated_v1';
+        if (!nextBank.length && local.length && !localStorage.getItem(migrationKey)) {
+          try {
+            await Promise.all(local.map(q => saveQuestionBankCloud(q, authState.user.uid)));
+            localStorage.setItem(migrationKey, '1');
+          } catch (error) {
+            console.error('Question bank migration error', error);
+          }
+        }
+        setQuestionBank(current => (!nextBank.length && local.length && !localStorage.getItem(migrationKey) ? current : nextBank));
+      },
+      (error) => console.error('Question bank sync error', error)
+    );
+    const unsubAttempts = subscribeTestAttempts(
+      async (nextAttempts) => {
+        const local = loadStoredArray('ezee_test_attempts');
+        const migrationKey = 'ezee_test_attempts_cloud_migrated_v1';
+        if (!nextAttempts.length && local.length && !localStorage.getItem(migrationKey)) {
+          try {
+            await Promise.all(local.map(attempt => saveTestAttemptCloud(attempt, authState.user.uid)));
+            localStorage.setItem(migrationKey, '1');
+          } catch (error) {
+            console.error('Test attempts migration error', error);
+          }
+        }
+        setTestAttempts(current => (!nextAttempts.length && local.length && !localStorage.getItem(migrationKey) ? current : nextAttempts));
+      },
+      (error) => console.error('Test attempts sync error', error)
+    );
+    return () => { unsubTests(); unsubBank(); unsubAttempts(); };
+  }, [authState.status, authState.user?.uid]);
+
+  const saveAttemptToCloud = async (attempt) => {
+    setTestAttempts(prev => [attempt, ...prev]);
+    try {
+      await saveTestAttemptCloud(attempt, authState.user?.uid || null);
+    } catch (error) {
+      console.error('Test attempt save error', error);
+      window.alert('Result generated, but cloud attempt saving failed. Please check Firestore Rules.');
+    }
+  };
+
   const login = async (email, password) => loginWithEmail(email, password);
   const logout = async () => { await logoutUser(); setScreen('home'); };
 
@@ -266,7 +341,7 @@ function App() {
   const updateAttendancePrefs = (patch) => setAttendancePrefs(prev => ({ ...prev, ...patch }));
 
   const studentTestId = new URLSearchParams(window.location.search).get('test');
-  if (studentTestId) return <StudentTestPortal testId={studentTestId} tests={tests} testAttempts={testAttempts} onAttemptComplete={(attempt) => setTestAttempts(prev => [attempt, ...prev])} />;
+  if (studentTestId) return <StudentTestPortal testId={studentTestId} tests={tests} testAttempts={testAttempts} onAttemptComplete={saveAttemptToCloud} />;
   if (authState.status === 'loading') return <AuthLoading dark={dark} setDark={setDark} />;
   if (authState.status === 'signedOut') return <Login onLogin={login} dark={dark} setDark={setDark} />;
   if (authState.status === 'blocked') return <AccessBlocked error={authState.error} email={authState.user?.email} onLogout={logout} dark={dark} setDark={setDark} />;
@@ -289,7 +364,7 @@ function App() {
          screen === 'students' ? <StudentsPage students={students} attendanceStats={attendanceStatsByStudent} view={studentView} selectedStudentId={selectedStudentId} onView={openStudent} onEdit={openStudentEdit} onDelete={deleteStudent} onBack={() => { setStudentView('list'); setSelectedStudentId(null); }} onAdd={() => { setModal('add'); setSelectedStudentId(null); }} sync={studentSync} /> :
          screen === 'attendance' ? <AttendancePage students={students} attendanceRecords={attendanceRecords} setAttendanceRecords={setAttendanceRecords} prefs={attendancePrefs} updatePrefs={updateAttendancePrefs} onBack={() => setScreen('home')} onPrint={setPrintReport} userId={authState.user?.uid} sync={attendanceSync} /> :
          screen === 'fees' ? <FeeManager students={students} feeRecords={feeRecords} prefs={feePrefs} setPrefs={setFeePrefs} feeModal={feeModal} setFeeModal={setFeeModal} userId={authState.user?.uid} sync={feeSync} /> :
-         screen === 'tests' ? <TestsPage tests={tests} setTests={setTests} testAttempts={testAttempts} questionBank={questionBank} setQuestionBank={setQuestionBank} testBuilderOpen={testBuilderOpen} setTestBuilderOpen={setTestBuilderOpen} editingTestId={editingTestId} setEditingTestId={setEditingTestId} /> :
+         screen === 'tests' ? <TestsPage tests={tests} setTests={setTests} testAttempts={testAttempts} questionBank={questionBank} setQuestionBank={setQuestionBank} testBuilderOpen={testBuilderOpen} setTestBuilderOpen={setTestBuilderOpen} editingTestId={editingTestId} setEditingTestId={setEditingTestId} userId={authState.user?.uid} sync={testSync} /> :
          screen === 'profile' ? <Profile onLogout={logout} profile={authState.profile} user={authState.user} /> :
          <ModulePlaceholder screen={screen} onBack={() => setScreen('home')} />}
       </main>
@@ -695,7 +770,7 @@ function CashIcon(){return <Svg><rect x="3" y="7" width="18" height="10" rx="2"/
 function UpiIcon(){return <Svg><path d="M7 3.8h4.5l-2 6.4h3l-5.2 9.9 1.5-7H6l1-9.3Z"/><path d="M14.5 6h4v12h-7"/></Svg>}
 function BankIcon(){return <Svg><path d="m4 9 8-4 8 4M5 10h14M6 11v7M10 11v7M14 11v7M18 11v7M4 20h16"/></Svg>}
 
-function TestsPage({ tests, setTests, testAttempts, questionBank, setQuestionBank, testBuilderOpen, setTestBuilderOpen, editingTestId, setEditingTestId }) {
+function TestsPage({ tests, setTests, testAttempts, questionBank, setQuestionBank, testBuilderOpen, setTestBuilderOpen, editingTestId, setEditingTestId, userId, sync }) {
   const [tab, setTab] = useState('tests');
   const [query, setQuery] = useState('');
   const [filterClass, setFilterClass] = useState('All classes');
@@ -707,12 +782,12 @@ function TestsPage({ tests, setTests, testAttempts, questionBank, setQuestionBan
 
   const openCreate = (seedQuestion = null) => { setEditingTestId(null); setTestBuilderOpen(true); if (seedQuestion) window.__ezee_test_seed_question = seedQuestion; else window.__ezee_test_seed_question = null; };
   const openEdit = id => { setEditingTestId(id); setTestBuilderOpen(true); };
-  const removeTest = id => { const t=tests.find(x=>x.id===id); if(!t)return; if(confirm(`Delete ${t.title}? This will not delete previous attempt records.`)) setTests(prev=>prev.filter(x=>x.id!==id)); };
+  const removeTest = async id => { const t=tests.find(x=>x.id===id); if(!t)return; if(confirm(`Delete ${t.title}? This will not delete previous attempt records.`)) { try { await deleteTestCloud(id); setTests(prev=>prev.filter(x=>x.id!==id)); } catch (error) { console.error(error); alert('Test could not be deleted from Firebase. Please check Firestore Rules.'); } } };
   const copyLink = async t => { const link=testLink(t.id); try { await navigator.clipboard.writeText(link); alert('Test link copied.'); } catch { prompt('Copy this test link:', link); } };
   const shareWhatsApp = t => window.open(`https://wa.me/?text=${encodeURIComponent(`EZEE VISION CHAMPUA\n${t.title}\nClass: ${t.className}\nSubject: ${t.subject}\nTest Link: ${testLink(t.id)}`)}`,'_blank');
 
   return <section className="tests-page">
-    <div className="page-heading"><div><div className="eyebrow"><span className="dot" /> TEST & EXAM CENTRE</div><h1>Tests</h1><p>Create, publish and share tests with a private student-only test link.</p></div><button className="primary-btn add-btn" onClick={() => openCreate()}><PlusIcon /> Create test</button></div>
+    <div className="page-heading"><div><div className="eyebrow"><span className="dot" /> TEST & EXAM CENTRE</div><h1>Tests</h1><p>Create, publish and share tests with a private student-only test link.</p></div><div className="heading-actions"><span className={`sync-pill ${sync?.status || 'idle'}`}><CloudIcon /> {sync?.status === 'error' ? 'Cloud error' : sync?.status === 'loading' ? 'Syncing…' : 'Cloud synced'}</span><button className="primary-btn add-btn" onClick={() => openCreate()}><PlusIcon /> Create test</button></div></div>
     <div className="test-tabs"><button className={tab==='tests'?'active':''} onClick={()=>setTab('tests')}><ClipboardIcon /> Tests</button><button className={tab==='bank'?'active':''} onClick={()=>setTab('bank')}><LibraryIcon /> Question bank</button><button className={tab==='results'?'active':''} onClick={()=>setTab('results')}><BarChartIcon /> Results</button></div>
 
     {tab==='tests' && <>
@@ -722,10 +797,10 @@ function TestsPage({ tests, setTests, testAttempts, questionBank, setQuestionBan
       {!filteredTests.length && <div className="empty-state panel"><div className="empty-icon"><ClipboardIcon /></div><h3>No tests yet</h3><p>Create your first test and generate a private student link.</p><button className="secondary-btn" onClick={()=>openCreate()}><PlusIcon /> Create test</button></div>}
     </>}
 
-    {tab==='bank' && <QuestionBankPage questionBank={questionBank} setQuestionBank={setQuestionBank} onCreateFromQuestion={q=>openCreate(q)} onDelete={id=>setQuestionBank(prev=>prev.filter(q=>q.id!==id))} />}
+    {tab==='bank' && <QuestionBankPage questionBank={questionBank} setQuestionBank={setQuestionBank} onCreateFromQuestion={q=>openCreate(q)} onDelete={async id=>{ try { await deleteQuestionBankCloud(id); setQuestionBank(prev=>prev.filter(q=>q.id!==id)); } catch (error) { console.error(error); alert('Question could not be deleted from Firebase.'); } }} />}
     {tab==='results' && <ResultsPage tests={tests} attempts={sortedAttempts} />}
 
-    {testBuilderOpen && <TestBuilderModal tests={tests} setTests={setTests} questionBank={questionBank} setQuestionBank={setQuestionBank} editingTestId={editingTestId} seedQuestion={window.__ezee_test_seed_question || null} pendingQuestion={pendingQuestion} clearPendingQuestion={()=>setPendingQuestion(null)} onClose={()=>{setTestBuilderOpen(false); window.__ezee_test_seed_question=null;}} onSaved={()=>{setTestBuilderOpen(false); window.__ezee_test_seed_question=null;}} setBankModal={setBankModal} />}
+    {testBuilderOpen && <TestBuilderModal tests={tests} setTests={setTests} questionBank={questionBank} setQuestionBank={setQuestionBank} editingTestId={editingTestId} seedQuestion={window.__ezee_test_seed_question || null} pendingQuestion={pendingQuestion} clearPendingQuestion={()=>setPendingQuestion(null)} onClose={()=>{setTestBuilderOpen(false); window.__ezee_test_seed_question=null;}} onSaved={()=>{setTestBuilderOpen(false); window.__ezee_test_seed_question=null;}} setBankModal={setBankModal} userId={userId} />}
     {bankModal && <QuestionBankPicker questionBank={questionBank} onClose={()=>setBankModal(false)} onPick={(q)=>{setPendingQuestion(q);setBankModal(false);}} />}
     <div className="watermark">Made With ❤️ By Shahid Sir</div>
   </section>;
@@ -772,7 +847,7 @@ function TestResultPrintOverlay({ test, attempts, onClose, onWhatsApp }) {
   return <div className="test-result-overlay"><div className="test-result-modal"><div className="test-result-toolbar"><div><div className="card-kicker">A4 RESULT REPORT</div><h2>{test.title}</h2><p className="section-caption">{test.className} • {test.subject} • {test.topic}</p></div><button className="close-btn" onClick={onClose}><CloseIcon /></button></div><div className="test-result-sheet"><div className="test-sheet-head"><img src="/assets/ezee-vision-logo.png" alt="EZEE VISION"/><div><strong>EZEE VISION CHAMPUA</strong><span>TEST RESULT & RANK LIST</span></div><em>{test.type}</em></div><div className="test-sheet-meta"><div><span>Class</span><strong>{test.className}</strong></div><div><span>Subject</span><strong>{test.subject}</strong></div><div><span>Topic</span><strong>{test.topic||'Any topic'}</strong></div><div><span>Attempts</span><strong>{attempts.length}</strong></div></div><div className="test-sheet-summary"><span>Average <b>{average}%</b></span><span>Top Score <b>{attempts.length?`${attempts[0].score}/${attempts[0].totalMarks}`:'—'}</b></span><span>Questions <b>{test.questions.length}</b></span></div><table><thead><tr><th>Rank</th><th>Student</th><th>Student ID</th><th>Score</th><th>Percentage</th></tr></thead><tbody>{attempts.map((a,i)=><tr key={a.id}><td>{i+1}</td><td>{a.studentName}</td><td>{a.studentId}</td><td>{a.score}/{a.totalMarks}</td><td>{a.percentage}%</td></tr>)}</tbody></table><div className="test-sheet-footer"><span>Generated for {test.title}</span><strong>Made With ❤️ By Shahid Sir</strong></div></div><div className="test-result-actions"><button className="primary-btn" onClick={()=>{document.body.classList.add('printing-test-results');window.print();}}><PrinterIcon/> Print / Save PDF</button><button className="whatsapp-btn" onClick={onWhatsApp}><WhatsAppIcon/> WhatsApp</button><button className="secondary-btn" onClick={onClose}><CloseIcon/> Close</button></div></div></div>;
 }
 
-function TestBuilderModal({ tests, setTests, questionBank, setQuestionBank, editingTestId, seedQuestion, pendingQuestion, clearPendingQuestion, onClose, onSaved, setBankModal }) {
+function TestBuilderModal({ tests, setTests, questionBank, setQuestionBank, editingTestId, seedQuestion, pendingQuestion, clearPendingQuestion, onClose, onSaved, setBankModal, userId }) {
   const existing = editingTestId ? tests.find(t=>t.id===editingTestId) : null;
   const initialQuestion = seedQuestion ? normalizeQuestion({...seedQuestion}) : blankQuestion();
   const [builder, setBuilder] = useState(() => existing ? normalizeTest(existing) : { id:createId('test'), title:'', type:'Practice Test', className:'Class 10', subject:'SST', topic:'', durationMinutes:30, negativeEnabled:false, negativeValue:0.25, randomize:true, liveStart:'', liveEnd:'', questions:[initialQuestion] });
@@ -780,11 +855,11 @@ function TestBuilderModal({ tests, setTests, questionBank, setQuestionBank, edit
   const [errors,setErrors]=useState([]);
   const q = builder.questions[activeIndex] || builder.questions[0];
   const updateQuestion = patch => setBuilder(prev=>({...prev,questions:prev.questions.map((x,i)=>i===activeIndex?{...x,...patch}:x)}));
-  const saveQuestionToBank = () => { if(!q?.prompt.trim()) return alert('Add a question first.'); setQuestionBank(prev=>[{...q,id:createId('qb'),savedAt:new Date().toISOString(),className:builder.className,subject:builder.subject},...prev]); alert('Question saved to question bank.'); };
+  const saveQuestionToBank = async () => { if(!q?.prompt.trim()) return alert('Add a question first.'); const saved={...q,id:createId('qb'),savedAt:new Date().toISOString(),className:builder.className,subject:builder.subject}; try { await saveQuestionBankCloud(saved,userId); setQuestionBank(prev=>[saved,...prev.filter(x=>x.id!==saved.id)]); alert('Question saved to Firebase question bank.'); } catch(error) { console.error(error); alert('Question could not be saved to Firebase. Please check Firestore Rules.'); } };
   useEffect(()=>{ if(pendingQuestion){ setBuilder(prev=>{ const next=[...prev.questions,normalizeQuestion(pendingQuestion)]; return {...prev,questions:next}; }); setActiveIndex(builder.questions.length); clearPendingQuestion(); } },[pendingQuestion]);
   const addFromPicker = () => setBankModal(true);
   const validate = () => { const e=[]; if(!builder.title.trim())e.push('Add a test title.'); if(!builder.topic.trim())e.push('Add a chapter/topic.'); if(builder.durationMinutes<1||builder.durationMinutes>360)e.push('Timer must be between 1 and 360 minutes.'); if(!builder.questions.length)e.push('Add at least one question.'); builder.questions.forEach((x,i)=>{if(!x.prompt.trim())e.push(`Question ${i+1}: add the question text.`);if(x.type==='MCQ'&&!x.options.every(o=>o.text.trim()))e.push(`Question ${i+1}: complete all 4 options.`);if(x.type==='MCQ'&&!x.correctOptionId)e.push(`Question ${i+1}: select the correct option.`);if(x.type!=='MCQ'&&!String(x.answer||'').trim())e.push(`Question ${i+1}: add the correct answer.`);});setErrors(e);return !e.length; };
-  const save = async () => { if(!validate())return; const test={...builder,createdAt:existing?.createdAt||new Date().toISOString(),createdBy:'Teacher/Admin',version:1}; setTests(prev=>existing?prev.map(x=>x.id===editingTestId?test:x):[test,...prev]); onSaved(); };
+  const save = async () => { if(!validate())return; const test={...builder,createdAt:existing?.createdAt||new Date().toISOString(),createdBy:existing?.createdBy||userId||null,version:1,published:true,publicAccess:true,publishedAt:existing?.publishedAt||new Date().toISOString()}; try { await saveTestCloud(test,userId); setTests(prev=>existing?prev.map(x=>x.id===editingTestId?test:x):[test,...prev]); onSaved(); } catch(error) { console.error(error); setErrors(['Test could not be saved to Firebase. Please check Firestore Rules.']); } };
   const removeQ = index => { if(builder.questions.length===1)return alert('A test needs at least one question.'); setBuilder(prev=>({...prev,questions:prev.questions.filter((_,i)=>i!==index)}));setActiveIndex(Math.max(0,Math.min(activeIndex,builder.questions.length-2))); };
   return <div className="modal-backdrop test-builder-backdrop"><div className="test-builder modal-sheet"><div className="modal-head"><div><div className="card-kicker">TEST BUILDER</div><h2>{existing?'Edit test':'Create new test'}</h2></div><button className="close-btn" onClick={onClose}><CloseIcon /></button></div>
     <div className="builder-top-grid"><Field label="Test title" value={builder.title} onChange={v=>setBuilder({...builder,title:v})} placeholder="e.g. Economics Chapter Test" /><Field label="Test type" as="select" value={builder.type} onChange={v=>setBuilder({...builder,type:v})} options={['Practice Test','Class Test','Full Exam','Live Test']} /><Field label="Class" as="select" value={builder.className} onChange={v=>setBuilder({...builder,className:v})} options={CLASS_OPTIONS} /><Field label="Subject" as="select" value={builder.subject} onChange={v=>setBuilder({...builder,subject:v})} options={['SST','SCIENCE','MATH','ENGLISH']} /><Field label="Chapter / Any Topic" value={builder.topic} onChange={v=>setBuilder({...builder,topic:v})} placeholder="Chapter, unit or any topic" /><Field label="Timer (minutes) • max 360" value={builder.durationMinutes} onChange={v=>setBuilder({...builder,durationMinutes:Math.max(1,Math.min(360,Number(v.replace(/\D/g,''))||1))})} inputMode="numeric" /><div className="builder-option-card"><span><ShuffleIcon /> Random questions & options</span><button className={`toggle ${builder.randomize?'on':''}`} onClick={()=>setBuilder({...builder,randomize:!builder.randomize})} aria-label="Toggle randomization"><span></span></button></div><div className="builder-option-card"><span><MinusCircleIcon /> Negative marking</span><button className={`toggle ${builder.negativeEnabled?'on':''}`} onClick={()=>setBuilder({...builder,negativeEnabled:!builder.negativeEnabled})} aria-label="Toggle negative marking"><span></span></button>{builder.negativeEnabled&&<input className="mini-number" value={builder.negativeValue} onChange={e=>setBuilder({...builder,negativeValue:Math.max(0,Number(e.target.value)||0)})} step="0.25" type="number" min="0" />}</div></div>
@@ -804,7 +879,10 @@ function TestBuilderModal({ tests, setTests, questionBank, setQuestionBank, edit
 function QuestionBankPicker({ questionBank, onClose, onPick }) { return <div className="modal-backdrop"><div className="modal-sheet small-sheet"><div className="modal-head"><div><div className="card-kicker">QUESTION BANK</div><h2>Add saved question</h2></div><button className="close-btn" onClick={onClose}><CloseIcon /></button></div>{questionBank.length?<div className="bank-picker-list">{questionBank.map(q=><button className="bank-picker-row" key={q.id} onClick={()=>onPick(q)}><span className="question-type-pill">{q.type}</span><div><strong>{q.prompt}</strong><span>{q.marks} marks • {q.subject||'General'}</span></div><PlusIcon /></button>)}</div>:<div className="empty-state inline"><div className="empty-icon"><LibraryIcon /></div><h3>No saved questions</h3><p>Save questions to the bank from the test builder first.</p></div>}</div></div>; }
 
 function StudentTestPortal({ testId, tests, testAttempts, onAttemptComplete }) {
-  const test = tests.find(t=>t.id===testId);
+  const localTest = tests.find(t => t.id === testId) || null;
+  const [test,setTest] = useState(localTest);
+  const [loading,setLoading] = useState(true);
+  const [loadError,setLoadError] = useState('');
   const [phase,setPhase]=useState('intro');
   const [student,setStudent]=useState({name:'',id:''});
   const [questions,setQuestions]=useState([]);
@@ -817,14 +895,76 @@ function StudentTestPortal({ testId, tests, testAttempts, onAttemptComplete }) {
   const [restartNotice,setRestartNotice]=useState(false);
   const [fullscreen,setFullscreen]=useState(false);
 
-  useEffect(()=>{ document.documentElement.dataset.theme='light'; const vis=()=>{if(phase==='test' && document.visibilityState==='hidden'){ setRestartNotice(true); setPhase('intro'); setAnswers({}); setMarked({}); setIndex(0); setQuestions([]); setStartedAt(null); } }; document.addEventListener('visibilitychange',vis); return ()=>document.removeEventListener('visibilitychange',vis); },[phase]);
+  useEffect(()=>{
+    let alive=true;
+    setLoading(true);
+    setLoadError('');
+    getTestCloud(testId)
+      .then(cloudTest=>{
+        if(!alive)return;
+        if(!cloudTest || cloudTest.published === false) {
+          setTest(null);
+          setLoadError('This test is unavailable or has been unpublished.');
+        } else {
+          setTest(cloudTest);
+        }
+      })
+      .catch(error=>{
+        console.error('Student test load error', error);
+        if(!alive)return;
+        setTest(null);
+        setLoadError('This test link could not be loaded right now.');
+      })
+      .finally(()=>{if(alive)setLoading(false);});
+    return ()=>{alive=false;};
+  },[testId]);
+
+  useEffect(()=>{
+    document.documentElement.dataset.theme='light';
+    const vis=()=>{
+      if(phase==='test' && document.visibilityState==='hidden'){
+        setRestartNotice(true);setPhase('intro');setAnswers({});setMarked({});setIndex(0);setQuestions([]);setStartedAt(null);
+        if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
+        setFullscreen(false);
+      }
+    };
+    document.addEventListener('visibilitychange',vis);
+    return ()=>document.removeEventListener('visibilitychange',vis);
+  },[phase]);
   useEffect(()=>{ if(phase!=='test'||remaining<=0)return; const timer=setInterval(()=>setRemaining(r=>Math.max(0,r-1)),1000); return()=>clearInterval(timer); },[phase,remaining]);
   useEffect(()=>{ if(phase==='test'&&remaining===0&&startedAt) submitTest(true); },[remaining,phase,startedAt]);
 
-  if(!test) return <div className="student-portal error"><div className="student-portal-card"><img src="/assets/ezee-vision-logo.png" alt="EZEE VISION" /><div className="portal-icon error"><ShieldCheckIcon /></div><h1>Test link unavailable</h1><p>This test may have been removed or the link is incorrect.</p></div></div>;
+  if(loading) return <div className="student-portal"><header className="portal-header"><div className="portal-brand"><img src="/assets/ezee-vision-logo.png" alt="EZEE VISION" /><div><strong>EZEE VISION CHAMPUA</strong><span>Student Test Portal</span></div></div><span className="portal-secure"><CloudIcon /> Loading</span></header><main className="portal-main"><div className="portal-card"><div className="empty-state inline"><div className="empty-icon"><CloudIcon /></div><h3>Loading test…</h3><p>Please wait while the secure test is loaded.</p></div></div></main></div>;
+  if(!test) return <div className="student-portal error"><div className="student-portal-card"><img src="/assets/ezee-vision-logo.png" alt="EZEE VISION" /><div className="portal-icon error"><ShieldCheckIcon /></div><h1>Test link unavailable</h1><p>{loadError || 'This test may have been removed or the link is incorrect.'}</p></div></div>;
+
   const liveState=test.type==='Live Test'?getLiveState(test):{kind:'open',label:'Ready to attempt'};
-  const startTest=()=>{ if(liveState.kind==='locked')return; if(!student.name.trim()||!student.id.trim())return alert('Enter your name and Student ID.'); const randomized=shuffleQuestions(test.questions,test.randomize); setQuestions(randomized); setAnswers({}); setMarked({}); setIndex(0); const seconds=Math.max(60,Number(test.durationMinutes||1)*60); setRemaining(seconds);setStartedAt(Date.now());setPhase('test'); if(document.documentElement.requestFullscreen){document.documentElement.requestFullscreen().then(()=>setFullscreen(true)).catch(()=>{});} };
-  const submitTest=(auto=false)=>{ if(phase!=='test'||!questions.length)return; const computed=evaluateTest(test,questions,answers); const attempt={id:createId('attempt'),testId:test.id,studentName:student.name.trim(),studentId:student.id.trim(),submittedAt:new Date().toISOString(),startedAt:new Date(startedAt||Date.now()).toISOString(),score:computed.score,totalMarks:computed.totalMarks,percentage:computed.percentage,correct:computed.correct,incorrect:computed.incorrect,unattempted:computed.unattempted,manualReview:computed.manualReview,autoSubmitted:auto,answers}; const higher=(testAttempts||[]).filter(a=>a.testId===test.id&&Number(a.score||0)>Number(computed.score||0)).length; computed.rank=higher+1; onAttemptComplete(attempt);setResult(computed);setPhase('result');if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});setFullscreen(false); };
+  const startTest=()=>{
+    if(liveState.kind==='locked')return;
+    if(!student.name.trim()||!student.id.trim())return alert('Enter your name and Student ID.');
+    const randomized=shuffleQuestions(test.questions,test.randomize);
+    setQuestions(randomized);setAnswers({});setMarked({});setIndex(0);
+    const seconds=Math.max(60,Number(test.durationMinutes||1)*60);
+    setRemaining(seconds);setStartedAt(Date.now());setPhase('test');
+    if(document.documentElement.requestFullscreen){document.documentElement.requestFullscreen().then(()=>setFullscreen(true)).catch(()=>{});}
+  };
+  const submitTest=async(auto=false)=>{
+    if(phase!=='test'||!questions.length)return;
+    const computed=evaluateTest(test,questions,answers);
+    const attempt={id:createId('attempt'),testId:test.id,studentName:student.name.trim(),studentId:student.id.trim(),submittedAt:new Date().toISOString(),startedAt:new Date(startedAt||Date.now()).toISOString(),score:computed.score,totalMarks:computed.totalMarks,percentage:computed.percentage,correct:computed.correct,incorrect:computed.incorrect,unattempted:computed.unattempted,manualReview:computed.manualReview,autoSubmitted:auto,answers};
+    const higherLocal=(testAttempts||[]).filter(a=>a.testId===test.id&&Number(a.score||0)>Number(computed.score||0)).length;
+    let rank=higherLocal+1;
+    try {
+      await onAttemptComplete(attempt);
+      await savePublicScore(test.id, attempt);
+      const publicScores=await getPublicScores(test.id);
+      rank=publicScores.filter(score=>Number(score.score||0)>Number(computed.score||0)).length+1;
+    } catch(error) {
+      console.error('Student result cloud sync error', error);
+    }
+    computed.rank=rank;
+    setResult(computed);setPhase('result');
+    if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});setFullscreen(false);
+  };
   const q=questions[index];
   const choose=(value)=>setAnswers(prev=>({...prev,[q.id]:value}));
   return <div className="student-portal">
@@ -851,6 +991,7 @@ function getLiveState(test){const now=Date.now();const start=test.liveStart?new 
 function formatSeconds(s){const sec=Math.max(0,Number(s)||0);const m=Math.floor(sec/60),r=sec%60;return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`;}
 function formatDateTime(value){return new Date(value).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});}
 function formatAnswer(q,value){if(value===undefined||String(value).trim()==='')return 'Not answered';if(q.type==='MCQ'){return q.options.find(o=>o.id===value)?.text||'Not answered';}return String(value);}
+function CloudIcon(){return <Svg><path d="M7.2 18.5h10.3a4.5 4.5 0 0 0 .5-9 6.2 6.2 0 0 0-11.8-1.8A4.7 4.7 0 0 0 7.2 18.5Z"/><path d="M9 13.2h6M12 10.2v6"/></Svg>}
 function LibraryIcon(){return <Svg><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5V5.5Z"/><path d="M4 18.5A2.5 2.5 0 0 1 6.5 16H20M8 7h7M8 11h7"/></Svg>}
 function TargetIcon(){return <Svg><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></Svg>}
 function ShuffleIcon(){return <Svg><path d="M4 7h3c3.5 0 4.2 7 7.7 7h5.3M17 5l3 2-3 2M4 17h3c1.6 0 2.6-1.4 3.3-2.9M17 13l3 2-3 2"/></Svg>}
