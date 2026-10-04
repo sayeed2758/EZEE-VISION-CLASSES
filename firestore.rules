@@ -31,9 +31,15 @@ service cloud.firestore {
       allow read, create, update, delete: if isTeacherOrAdmin();
     }
 
-    // Keep the remaining application data locked until each module is migrated.
-    match /attendance/{id} { allow read, create, update, delete: if isTeacherOrAdmin(); }
-    match /feeRecords/{id} { allow read, write: if false; }
+    match /attendance/{id} {
+      allow read, create, update, delete: if isTeacherOrAdmin();
+    }
+
+    match /feeRecords/{id} {
+      allow read, create, update, delete: if isTeacherOrAdmin();
+    }
+
+    // Keep remaining modules locked until each one is migrated.
     match /tests/{id} { allow read, write: if false; }
     match /questionBank/{id} { allow read, write: if false; }
     match /testAttempts/{id} { allow read, write: if false; }
