@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import { loginWithEmail, logoutUser, watchAuth } from './services/auth';
 
 const CLASS_OPTIONS = ['Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10'];
 const CLASS_FEE_DEFAULTS = { 'Class 4': 1000, 'Class 5': 1000, 'Class 6': 1000, 'Class 7': 1200, 'Class 8': 1200, 'Class 9': 1500, 'Class 10': 1500 };
@@ -33,7 +34,7 @@ const emptyForm = {
 
 function App() {
   const [screen, setScreen] = useState('home');
-  const [loggedIn, setLoggedIn] = useState(() => localStorage.getItem('ezee_logged_in') === '1');
+  const [authState, setAuthState] = useState({ status: 'loading', user: null, profile: null, error: null });
   const [dark, setDark] = useState(() => localStorage.getItem('ezee_theme') === 'dark');
   const [now, setNow] = useState(new Date());
   const [students, setStudents] = useState(() => {
@@ -121,8 +122,10 @@ function App() {
     return values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : null;
   }, [attendanceStatsByStudent]);
 
-  const login = () => { localStorage.setItem('ezee_logged_in', '1'); setLoggedIn(true); };
-  const logout = () => { localStorage.removeItem('ezee_logged_in'); setLoggedIn(false); setScreen('home'); };
+  useEffect(() => watchAuth((next) => setAuthState({ status: next.user ? (next.profile ? 'signedIn' : 'blocked') : 'signedOut', user: next.user, profile: next.profile, error: next.error })), []);
+
+  const login = async (email, password) => loginWithEmail(email, password);
+  const logout = async () => { await logoutUser(); setScreen('home'); };
 
   const openStudent = (id) => { setSelectedStudentId(id); setStudentView('detail'); setScreen('students'); };
   const openStudentEdit = (id) => { setSelectedStudentId(id); setModal('edit'); };
@@ -153,7 +156,9 @@ function App() {
 
   const studentTestId = new URLSearchParams(window.location.search).get('test');
   if (studentTestId) return <StudentTestPortal testId={studentTestId} tests={tests} testAttempts={testAttempts} onAttemptComplete={(attempt) => setTestAttempts(prev => [attempt, ...prev])} />;
-  if (!loggedIn) return <Login onLogin={login} dark={dark} setDark={setDark} />;
+  if (authState.status === 'loading') return <AuthLoading dark={dark} setDark={setDark} />;
+  if (authState.status === 'signedOut') return <Login onLogin={login} dark={dark} setDark={setDark} />;
+  if (authState.status === 'blocked') return <AccessBlocked error={authState.error} email={authState.user?.email} onLogout={logout} dark={dark} setDark={setDark} />;
 
   return (
     <div className="app-shell">
@@ -174,7 +179,7 @@ function App() {
          screen === 'attendance' ? <AttendancePage students={students} attendanceRecords={attendanceRecords} setAttendanceRecords={setAttendanceRecords} prefs={attendancePrefs} updatePrefs={updateAttendancePrefs} onBack={() => setScreen('home')} onPrint={setPrintReport} /> :
          screen === 'fees' ? <FeeManager students={students} setStudents={setStudents} feeRecords={feeRecords} setFeeRecords={setFeeRecords} prefs={feePrefs} setPrefs={setFeePrefs} feeModal={feeModal} setFeeModal={setFeeModal} /> :
          screen === 'tests' ? <TestsPage tests={tests} setTests={setTests} testAttempts={testAttempts} questionBank={questionBank} setQuestionBank={setQuestionBank} testBuilderOpen={testBuilderOpen} setTestBuilderOpen={setTestBuilderOpen} editingTestId={editingTestId} setEditingTestId={setEditingTestId} /> :
-         screen === 'profile' ? <Profile onLogout={logout} /> :
+         screen === 'profile' ? <Profile onLogout={logout} profile={authState.profile} user={authState.user} /> :
          <ModulePlaceholder screen={screen} onBack={() => setScreen('home')} />}
       </main>
 
@@ -195,16 +200,33 @@ function App() {
 
 function Login({ onLogin, dark, setDark }) {
   const [showPassword, setShowPassword] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async () => {
+    setError('');
+    if (!email.trim() || !password) { setError('Enter your email and password.'); return; }
+    setBusy(true);
+    try { await onLogin(email, password); } catch (e) {
+      const messages = { 'auth/invalid-credential': 'Incorrect email or password.', 'auth/invalid-email': 'Please enter a valid email address.', 'auth/too-many-requests': 'Too many attempts. Please try again later.', ROLE_NOT_ASSIGNED: 'Your account exists, but an Admin has not assigned your role yet.', ACCOUNT_DISABLED: 'This account has been disabled by the Admin.' };
+      setError(messages[e?.code] || 'Unable to sign in. Please try again.');
+    } finally { setBusy(false); }
+  };
   return <div className="login-page">
     <div className="login-top">
       <div className="brand-wrap"><img className="brand-logo login-logo" src="/assets/ezee-vision-logo.png" alt="EZEE VISION" /><div><div className="brand-name">EZEE VISION</div><div className="brand-sub">CHAMPUA</div></div></div>
       <button className="icon-btn" onClick={() => setDark(v => !v)} aria-label="Toggle theme">{dark ? <SunIcon /> : <MoonIcon />}</button>
     </div>
     <div className="login-hero"><div className="eyebrow"><span className="dot" /> PREMIUM COACHING APP</div><h1>Teach better.<br /><span>Manage smarter.</span></h1><p>One polished app for your coaching institute, teachers and students.</p></div>
-    <div className="login-card"><div className="card-kicker">WELCOME BACK</div><h2>Sign in to your app</h2><p className="muted">Demo login is enabled while the app is under development.</p><label>Email or phone</label><input className="field" placeholder="teacher@example.com" defaultValue="teacher@ezeevision.app" /><label>Password</label><div className="password-wrap"><input className="field" type={showPassword ? 'text' : 'password'} defaultValue="123456" /><button type="button" className="eye-btn" onClick={() => setShowPassword(v => !v)}>{showPassword ? 'Hide' : 'Show'}</button></div><button className="primary-btn full" onClick={onLogin}><LockIcon /> Continue to Dashboard <ArrowRightIcon /></button><div className="secure-note"><SparklesIcon /> App-first interface • APK-ready foundation</div></div>
+    <div className="login-card"><div className="card-kicker">WELCOME BACK</div><h2>Sign in to your app</h2><p className="muted">Sign in with your Firebase account.</p><label>Email</label><input className="field" placeholder="teacher@example.com" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" /><label>Password</label><div className="password-wrap"><input className="field" type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') submit(); }} autoComplete="current-password" /><button type="button" className="eye-btn" onClick={() => setShowPassword(v => !v)}>{showPassword ? 'Hide' : 'Show'}</button></div>{error && <div className="form-error">{error}</div>}<button className="primary-btn full" onClick={submit} disabled={busy}><LockIcon /> {busy ? 'Signing in…' : 'Continue to Dashboard'} <ArrowRightIcon /></button><div className="secure-note"><SparklesIcon /> App-first interface • APK-ready foundation</div></div>
     <div className="login-footer">Made With <span>❤️</span> By Shahid Sir</div>
   </div>;
 }
+
+
+function AuthLoading({ dark, setDark }) { return <div className="login-page"><div className="login-top"><div className="brand-wrap"><img className="brand-logo login-logo" src="/assets/ezee-vision-logo.png" alt="EZEE VISION" /><div><div className="brand-name">EZEE VISION</div><div className="brand-sub">CHAMPUA</div></div></div><button className="icon-btn" onClick={() => setDark(v => !v)} aria-label="Toggle theme">{dark ? <SunIcon /> : <MoonIcon />}</button></div><div className="login-card"><div className="card-kicker">SECURE LOGIN</div><h2>Checking your account…</h2><p className="muted">Connecting securely to EZEE VISION.</p><div className="secure-note"><ShieldCheckIcon /> Firebase Authentication</div></div></div>; }
+function AccessBlocked({ error, email, onLogout, dark, setDark }) { const title = error === 'ACCOUNT_DISABLED' ? 'Account disabled' : 'Role not assigned'; const message = error === 'ACCOUNT_DISABLED' ? 'This account has been disabled. Please contact the Admin.' : 'Your Firebase account is created, but your Admin profile is not assigned yet. Ask the Admin to create your users profile with the correct role.'; return <div className="login-page"><div className="login-top"><div className="brand-wrap"><img className="brand-logo login-logo" src="/assets/ezee-vision-logo.png" alt="EZEE VISION" /><div><div className="brand-name">EZEE VISION</div><div className="brand-sub">CHAMPUA</div></div></div><button className="icon-btn" onClick={() => setDark(v => !v)} aria-label="Toggle theme">{dark ? <SunIcon /> : <MoonIcon />}</button></div><div className="login-card"><div className="card-kicker">ACCESS CONTROL</div><h2>{title}</h2><p className="muted">{message}</p>{email && <div className="secure-note"><ShieldCheckIcon /> {email}</div>}<button className="secondary-btn full" onClick={onLogout}><LogOutIcon /> Sign out</button></div></div>; }
 
 function Dashboard({ dateText, timeText, students, attendanceStats, attendanceAverage, feeRecords, onNavigate }) {
   const active = students.filter(s => s.status === 'Active').length;
@@ -707,7 +729,7 @@ function PlayIcon(){return <Svg><path d="m8 5 11 7-11 7V5Z"/></Svg>}
 function FlagIcon(){return <Svg><path d="M6 21V4M6 5h10l-2.5 3L16 11H6"/></Svg>}
 function TrophyIcon(){return <Svg><path d="M8 4h8v5a4 4 0 0 1-8 0V4ZM6 5H3.5v1.8A3.2 3.2 0 0 0 6.7 10M18 5h2.5v1.8a3.2 3.2 0 0 1-3.2 3.2M12 13v4M8.5 20h7M9.5 17h5"/></Svg>}
 function CloseCircleIcon(){return <Svg><circle cx="12" cy="12" r="8.5"/><path d="m9 9 6 6M15 9l-6 6"/></Svg>}
-function Profile({ onLogout }) { return <section className="module-page"><div className="profile-avatar">SS</div><div className="eyebrow"><span className="dot" /> ADMIN / TEACHER</div><h1>Shahid Sir</h1><p>Your app profile and workspace controls.</p><div className="profile-list"><InfoRow label="Institute" value="EZEE VISION CHAMPUA" /><InfoRow label="Role" value="Admin / Teacher" /><InfoRow label="Interface" value="App-first • APK-ready" /></div><button className="secondary-btn full" onClick={onLogout}><LogOutIcon /> Sign out</button><div className="watermark">Made With ❤️ By Shahid Sir</div></section>; }
+function Profile({ onLogout, profile, user }) { const roleLabel = profile?.role === 'admin' ? 'Admin' : 'Teacher'; return <section className="module-page"><div className="profile-avatar">{(profile?.name || user?.email || 'EV').slice(0,2).toUpperCase()}</div><div className="eyebrow"><span className="dot" /> {roleLabel.toUpperCase()}</div><h1>{profile?.name || user?.email || 'Account'}</h1><p>Your app profile and workspace controls.</p><div className="profile-list"><InfoRow label="Institute" value="EZEE VISION CHAMPUA" /><InfoRow label="Role" value={roleLabel} /><InfoRow label="Email" value={user?.email || '—'} /><InfoRow label="Interface" value="App-first • APK-ready" /></div><button className="secondary-btn full" onClick={onLogout}><LogOutIcon /> Sign out</button><div className="watermark">Made With ❤️ By Shahid Sir</div></section>; }
 
 function PrintReport({ report }) {
   if (!report?.data) return null;
