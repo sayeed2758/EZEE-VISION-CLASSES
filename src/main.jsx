@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { loginWithEmail, logoutUser, watchAuth } from './services/auth';
+import { subscribeStudents, createStudent, updateStudentInCloud, deleteStudentInCloud } from './services/students';
 
 const CLASS_OPTIONS = ['Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10'];
 const CLASS_FEE_DEFAULTS = { 'Class 4': 1000, 'Class 5': 1000, 'Class 6': 1000, 'Class 7': 1200, 'Class 8': 1200, 'Class 9': 1500, 'Class 10': 1500 };
@@ -51,6 +52,7 @@ function App() {
       return seedStudents;
     }
   });
+  const [studentSync, setStudentSync] = useState({ status: 'idle', message: '' });
   const [attendanceRecords, setAttendanceRecords] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('ezee_attendance'));
@@ -124,31 +126,67 @@ function App() {
 
   useEffect(() => watchAuth((next) => setAuthState({ status: next.user ? (next.profile ? 'signedIn' : 'blocked') : 'signedOut', user: next.user, profile: next.profile, error: next.error })), []);
 
+  useEffect(() => {
+    if (authState.status !== 'signedIn') {
+      setStudentSync({ status: 'idle', message: '' });
+      return undefined;
+    }
+    setStudentSync({ status: 'loading', message: 'Connecting students to Firebase…' });
+    const unsubscribe = subscribeStudents(
+      (nextStudents) => {
+        setStudents(nextStudents);
+        setStudentSync({ status: 'synced', message: 'Cloud synced in real time' });
+      },
+      (error) => {
+        console.error('Students sync error', error);
+        setStudentSync({ status: 'error', message: 'Could not sync students. Check Firestore Rules.' });
+      }
+    );
+    return unsubscribe;
+  }, [authState.status]);
+
   const login = async (email, password) => loginWithEmail(email, password);
   const logout = async () => { await logoutUser(); setScreen('home'); };
 
   const openStudent = (id) => { setSelectedStudentId(id); setStudentView('detail'); setScreen('students'); };
   const openStudentEdit = (id) => { setSelectedStudentId(id); setModal('edit'); };
-  const addStudent = (payload) => {
+  const addStudent = async (payload) => {
     const nextNumber = students.reduce((max, s) => Math.max(max, Number(String(s.id).replace(/\D/g, '')) || 1000), 1000) + 1;
-    setStudents([{ ...payload, monthlyFee: Number(payload.monthlyFee) || CLASS_FEE_DEFAULTS[payload.className] || 0, discount: Number(payload.discount) || 0, id: `EV-${nextNumber}`, joined: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) }, ...students]);
-    setModal(null);
+    const nextStudent = { ...payload, monthlyFee: Number(payload.monthlyFee) || CLASS_FEE_DEFAULTS[payload.className] || 0, discount: Number(payload.discount) || 0, id: `EV-${nextNumber}`, joined: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) };
+    try {
+      await createStudent(nextStudent, authState.user.uid);
+      setModal(null);
+    } catch (error) {
+      console.error(error);
+      window.alert('Student could not be saved to Firebase. Please check Firestore Rules and try again.');
+    }
   };
-  const updateStudent = (payload) => {
-    setStudents(students.map(s => s.id === payload.id ? { ...s, ...payload, monthlyFee: Number(payload.monthlyFee) || 0, discount: Number(payload.discount) || 0 } : s));
-    setModal(null);
+  const updateStudent = async (payload) => {
+    const nextStudent = { ...payload, monthlyFee: Number(payload.monthlyFee) || 0, discount: Number(payload.discount) || 0 };
+    try {
+      await updateStudentInCloud(nextStudent, authState.user.uid);
+      setModal(null);
+    } catch (error) {
+      console.error(error);
+      window.alert('Student changes could not be saved to Firebase. Please check Firestore Rules and try again.');
+    }
   };
-  const deleteStudent = (id) => {
+  const deleteStudent = async (id) => {
     const student = students.find(s => s.id === id);
     if (!student) return;
     if (window.confirm(`Delete ${student.name}? This action cannot be undone.`)) {
-      setStudents(students.filter(s => s.id !== id));
-      setSelectedStudentId(null);
-      setStudentView('list');
-      const next = { ...attendanceRecords };
-      Object.keys(next).forEach(key => { delete next[key][id]; });
-      setAttendanceRecords(next);
-      setFeeRecords(records => records.filter(r => r.studentId !== id));
+      try {
+        await deleteStudentInCloud(id);
+        setSelectedStudentId(null);
+        setStudentView('list');
+        const next = { ...attendanceRecords };
+        Object.keys(next).forEach(key => { delete next[key][id]; });
+        setAttendanceRecords(next);
+        setFeeRecords(records => records.filter(r => r.studentId !== id));
+      } catch (error) {
+        console.error(error);
+        window.alert('Student could not be deleted from Firebase. Please try again.');
+      }
     }
   };
 
@@ -175,7 +213,7 @@ function App() {
 
       <main className="main-content">
         {screen === 'home' ? <Dashboard dateText={dateText} timeText={timeText} students={students} attendanceStats={attendanceStatsByStudent} attendanceAverage={attendanceAverage} feeRecords={feeRecords} onNavigate={setScreen} /> :
-         screen === 'students' ? <StudentsPage students={students} attendanceStats={attendanceStatsByStudent} view={studentView} selectedStudentId={selectedStudentId} onView={openStudent} onEdit={openStudentEdit} onDelete={deleteStudent} onBack={() => { setStudentView('list'); setSelectedStudentId(null); }} onAdd={() => { setModal('add'); setSelectedStudentId(null); }} /> :
+         screen === 'students' ? <StudentsPage students={students} attendanceStats={attendanceStatsByStudent} view={studentView} selectedStudentId={selectedStudentId} onView={openStudent} onEdit={openStudentEdit} onDelete={deleteStudent} onBack={() => { setStudentView('list'); setSelectedStudentId(null); }} onAdd={() => { setModal('add'); setSelectedStudentId(null); }} sync={studentSync} /> :
          screen === 'attendance' ? <AttendancePage students={students} attendanceRecords={attendanceRecords} setAttendanceRecords={setAttendanceRecords} prefs={attendancePrefs} updatePrefs={updateAttendancePrefs} onBack={() => setScreen('home')} onPrint={setPrintReport} /> :
          screen === 'fees' ? <FeeManager students={students} setStudents={setStudents} feeRecords={feeRecords} setFeeRecords={setFeeRecords} prefs={feePrefs} setPrefs={setFeePrefs} feeModal={feeModal} setFeeModal={setFeeModal} /> :
          screen === 'tests' ? <TestsPage tests={tests} setTests={setTests} testAttempts={testAttempts} questionBank={questionBank} setQuestionBank={setQuestionBank} testBuilderOpen={testBuilderOpen} setTestBuilderOpen={setTestBuilderOpen} editingTestId={editingTestId} setEditingTestId={setEditingTestId} /> :
@@ -254,7 +292,7 @@ function Dashboard({ dateText, timeText, students, attendanceStats, attendanceAv
 function Stat({ value, label, change, tone, icon }) { return <div className={`stat-card ${tone}`}><div className="stat-top"><div className="stat-icon">{icon}</div><span className="stat-value">{value}</span></div><div className="stat-label">{label}</div><div className="stat-change">{change}</div></div>; }
 function QuickAction({ icon, label, sub, screen, tone, onNavigate }) { return <button className="quick-card" onClick={() => onNavigate(screen)}><span className={`quick-icon ${tone}`}>{icon}</span><span className="quick-text"><strong>{label}</strong><span>{sub}</span></span><span className="arrow"><ChevronRightIcon /></span></button>; }
 
-function StudentsPage({ students, attendanceStats, view, selectedStudentId, onView, onEdit, onDelete, onBack, onAdd }) {
+function StudentsPage({ students, attendanceStats, view, selectedStudentId, onView, onEdit, onDelete, onBack, onAdd, sync }) {
   const [query, setQuery] = useState('');
   const [classFilter, setClassFilter] = useState('All classes');
   const [batchFilter, setBatchFilter] = useState('All batches');
@@ -273,6 +311,7 @@ function StudentsPage({ students, attendanceStats, view, selectedStudentId, onVi
 
   return <section className="students-page">
     <div className="page-heading"><div><div className="eyebrow"><span className="dot" /> STUDENT MANAGEMENT</div><h1>Students</h1><p>One place for learner profiles, classes and batches.</p></div><button className="primary-btn add-btn" onClick={onAdd}><PlusIcon /> Add student</button></div>
+    <div className={`student-cloud-status ${sync?.status || 'idle'}`}><span className="status-icon">{sync?.status === 'loading' ? <ClockIcon /> : sync?.status === 'error' ? <CloseCircleIcon /> : <CheckCircleIcon />}</span><span>{sync?.message || 'Waiting for Firebase…'}</span></div>
     <div className="student-stats"><MiniStat value={students.length} label="Total" icon={<UsersIcon />} /><MiniStat value={students.filter(s => s.status === 'Active').length} label="Active" icon={<CheckCircleIcon />} /><MiniStat value={students.filter(s => s.status === 'Active').filter(s => s.fee !== 'Paid').length} label="Fee follow-ups" icon={<ReceiptIcon />} /></div>
     <div className="students-toolbar panel"><div className="search-box"><SearchIcon /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search name, ID, guardian or phone" /></div><div className="filter-row"><select value={classFilter} onChange={e => setClassFilter(e.target.value)} aria-label="Filter by class"><option>All classes</option>{CLASS_OPTIONS.map(o => <option key={o}>{o}</option>)}</select><select value={batchFilter} onChange={e => setBatchFilter(e.target.value)} aria-label="Filter by batch"><option>All batches</option>{BATCH_OPTIONS.map(o => <option key={o}>{o}</option>)}</select><select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Filter by status"><option>All</option>{STATUS_OPTIONS.map(o => <option key={o}>{o}</option>)}</select></div></div>
     <div className="student-list-header"><span>{filtered.length} student{filtered.length !== 1 ? 's' : ''}</span><span>Tap a card to open profile</span></div>
