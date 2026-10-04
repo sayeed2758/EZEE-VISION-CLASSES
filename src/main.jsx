@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { loginWithEmail, logoutUser, watchAuth } from './services/auth';
 import { subscribeStudents, createStudent, updateStudentInCloud, deleteStudentInCloud } from './services/students';
+import { subscribeAttendance, saveAttendanceCloud } from './services/attendance';
 
 const CLASS_OPTIONS = ['Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10'];
 const CLASS_FEE_DEFAULTS = { 'Class 4': 1000, 'Class 5': 1000, 'Class 6': 1000, 'Class 7': 1200, 'Class 8': 1200, 'Class 9': 1500, 'Class 10': 1500 };
@@ -53,6 +54,7 @@ function App() {
     }
   });
   const [studentSync, setStudentSync] = useState({ status: 'idle', message: '' });
+  const [attendanceSync, setAttendanceSync] = useState({ status: 'idle', message: '' });
   const [attendanceRecords, setAttendanceRecords] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('ezee_attendance'));
@@ -145,6 +147,42 @@ function App() {
     return unsubscribe;
   }, [authState.status]);
 
+  useEffect(() => {
+    if (authState.status !== 'signedIn') {
+      setAttendanceSync({ status: 'idle', message: '' });
+      return undefined;
+    }
+    setAttendanceSync({ status: 'loading', message: 'Connecting attendance to Firebase…' });
+    const unsubscribe = subscribeAttendance(
+      async (nextRecords) => {
+        setAttendanceRecords((current) => {
+          const localKeys = Object.keys(current || {});
+          if (!Object.keys(nextRecords).length && localKeys.length) return current;
+          return nextRecords;
+        });
+        const local = (() => { try { return JSON.parse(localStorage.getItem('ezee_attendance')) || {}; } catch { return {}; } })();
+        const migrationKey = 'ezee_attendance_cloud_migrated_v1';
+        if (!Object.keys(nextRecords).length && Object.keys(local).length && !localStorage.getItem(migrationKey)) {
+          try {
+            await Promise.all(Object.entries(local).map(([key, records]) => {
+              const [date, className, batch] = key.split('|');
+              return saveAttendanceCloud({ date, className, batch, records }, authState.user.uid);
+            }));
+            localStorage.setItem(migrationKey, '1');
+          } catch (error) {
+            console.error('Attendance migration error', error);
+          }
+        }
+        setAttendanceSync({ status: 'synced', message: 'Attendance cloud synced in real time' });
+      },
+      (error) => {
+        console.error('Attendance sync error', error);
+        setAttendanceSync({ status: 'error', message: 'Could not sync attendance. Check Firestore Rules.' });
+      }
+    );
+    return unsubscribe;
+  }, [authState.status]);
+
   const login = async (email, password) => loginWithEmail(email, password);
   const logout = async () => { await logoutUser(); setScreen('home'); };
 
@@ -214,7 +252,7 @@ function App() {
       <main className="main-content">
         {screen === 'home' ? <Dashboard dateText={dateText} timeText={timeText} students={students} attendanceStats={attendanceStatsByStudent} attendanceAverage={attendanceAverage} feeRecords={feeRecords} onNavigate={setScreen} /> :
          screen === 'students' ? <StudentsPage students={students} attendanceStats={attendanceStatsByStudent} view={studentView} selectedStudentId={selectedStudentId} onView={openStudent} onEdit={openStudentEdit} onDelete={deleteStudent} onBack={() => { setStudentView('list'); setSelectedStudentId(null); }} onAdd={() => { setModal('add'); setSelectedStudentId(null); }} sync={studentSync} /> :
-         screen === 'attendance' ? <AttendancePage students={students} attendanceRecords={attendanceRecords} setAttendanceRecords={setAttendanceRecords} prefs={attendancePrefs} updatePrefs={updateAttendancePrefs} onBack={() => setScreen('home')} onPrint={setPrintReport} /> :
+         screen === 'attendance' ? <AttendancePage students={students} attendanceRecords={attendanceRecords} setAttendanceRecords={setAttendanceRecords} prefs={attendancePrefs} updatePrefs={updateAttendancePrefs} onBack={() => setScreen('home')} onPrint={setPrintReport} userId={authState.user?.uid} sync={attendanceSync} /> :
          screen === 'fees' ? <FeeManager students={students} setStudents={setStudents} feeRecords={feeRecords} setFeeRecords={setFeeRecords} prefs={feePrefs} setPrefs={setFeePrefs} feeModal={feeModal} setFeeModal={setFeeModal} /> :
          screen === 'tests' ? <TestsPage tests={tests} setTests={setTests} testAttempts={testAttempts} questionBank={questionBank} setQuestionBank={setQuestionBank} testBuilderOpen={testBuilderOpen} setTestBuilderOpen={setTestBuilderOpen} editingTestId={editingTestId} setEditingTestId={setEditingTestId} /> :
          screen === 'profile' ? <Profile onLogout={logout} profile={authState.profile} user={authState.user} /> :
@@ -362,7 +400,7 @@ function StudentModal({ title, submitLabel, student, onClose, onSubmit }) {
 function Field({ label, value, onChange, placeholder, required, inputMode }) { return <label className="form-field"><span>{label}</span><input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} required={required} inputMode={inputMode} /></label>; }
 function SelectField({ label, value, onChange, options }) { return <label className="form-field"><span>{label}</span><select value={value} onChange={e => onChange(e.target.value)}>{options.map(o => <option key={o}>{o}</option>)}</select></label>; }
 
-function AttendancePage({ students, attendanceRecords, setAttendanceRecords, prefs, updatePrefs, onBack, onPrint }) {
+function AttendancePage({ students, attendanceRecords, setAttendanceRecords, prefs, updatePrefs, onBack, onPrint, userId, sync }) {
   const [draft, setDraft] = useState({});
   const [saveMessage, setSaveMessage] = useState('');
   const groupKey = attendanceKey(prefs.date, prefs.className, prefs.batch);
@@ -386,9 +424,16 @@ function AttendancePage({ students, attendanceRecords, setAttendanceRecords, pre
     setDraft(prev => { const next = { ...prev }; delete next[studentId]; return next; });
     setSaveMessage('');
   };
-  const save = () => {
-    setAttendanceRecords(prev => ({ ...prev, [groupKey]: normalizeMap(draft) }));
-    setSaveMessage('Attendance saved');
+  const save = async () => {
+    const normalized = normalizeMap(draft);
+    setAttendanceRecords(prev => ({ ...prev, [groupKey]: normalized }));
+    try {
+      await saveAttendanceCloud({ date: prefs.date, className: prefs.className, batch: prefs.batch, records: normalized }, userId);
+      setSaveMessage('Attendance saved to Firebase');
+    } catch (error) {
+      console.error(error);
+      setSaveMessage('Saved locally, but Firebase sync failed');
+    }
   };
 
   const dailyData = useMemo(() => buildDailyReportData(prefs.date, prefs.className, prefs.batch, selectedStudents, draft), [prefs.date, prefs.className, prefs.batch, selectedStudents, draft]);
@@ -434,7 +479,7 @@ function AttendancePage({ students, attendanceRecords, setAttendanceRecords, pre
   const printMonthly = () => { onPrint({ type: 'monthly', data: monthlyData }); setTimeout(() => window.print(), 60); };
 
   return <section className="attendance-page">
-    <div className="page-heading attendance-heading"><div><div className="eyebrow"><span className="dot" /> ATTENDANCE PRO</div><h1>Attendance</h1><p>One student • one attendance per day • editable later.</p></div><div className="role-badge"><ShieldCheckIcon /> Teacher + Admin</div></div>
+    <div className="page-heading attendance-heading"><div><div className="eyebrow"><span className="dot" /> ATTENDANCE PRO</div><h1>Attendance</h1><p>One student • one attendance per day • editable later.</p></div><div className="heading-actions"><span className={`role-badge sync-pill ${sync.status}`}><CheckCircleIcon /> {sync.status === "synced" ? "Firebase synced" : sync.status === "loading" ? "Connecting…" : sync.status === "error" ? "Sync error" : "Cloud"}</span><span className="role-badge"><ShieldCheckIcon /> Teacher + Admin</span></div></div>
     <div className="attendance-tabs" role="tablist"><button className={prefs.tab === 'daily' ? 'tab-btn active' : 'tab-btn'} onClick={() => updatePrefs({ tab: 'daily' })}><CalendarCheckIcon /> Daily</button><button className={prefs.tab === 'monthly' ? 'tab-btn active' : 'tab-btn'} onClick={() => updatePrefs({ tab: 'monthly' })}><BarChartIcon /> Monthly</button></div>
 
     {prefs.tab === 'daily' ? <>
@@ -692,7 +737,7 @@ function TestBuilderModal({ tests, setTests, questionBank, setQuestionBank, edit
   useEffect(()=>{ if(pendingQuestion){ setBuilder(prev=>{ const next=[...prev.questions,normalizeQuestion(pendingQuestion)]; return {...prev,questions:next}; }); setActiveIndex(builder.questions.length); clearPendingQuestion(); } },[pendingQuestion]);
   const addFromPicker = () => setBankModal(true);
   const validate = () => { const e=[]; if(!builder.title.trim())e.push('Add a test title.'); if(!builder.topic.trim())e.push('Add a chapter/topic.'); if(builder.durationMinutes<1||builder.durationMinutes>360)e.push('Timer must be between 1 and 360 minutes.'); if(!builder.questions.length)e.push('Add at least one question.'); builder.questions.forEach((x,i)=>{if(!x.prompt.trim())e.push(`Question ${i+1}: add the question text.`);if(x.type==='MCQ'&&!x.options.every(o=>o.text.trim()))e.push(`Question ${i+1}: complete all 4 options.`);if(x.type==='MCQ'&&!x.correctOptionId)e.push(`Question ${i+1}: select the correct option.`);if(x.type!=='MCQ'&&!String(x.answer||'').trim())e.push(`Question ${i+1}: add the correct answer.`);});setErrors(e);return !e.length; };
-  const save = () => { if(!validate())return; const test={...builder,createdAt:existing?.createdAt||new Date().toISOString(),createdBy:'Teacher/Admin',version:1}; setTests(prev=>existing?prev.map(x=>x.id===editingTestId?test:x):[test,...prev]); onSaved(); };
+  const save = async () => { if(!validate())return; const test={...builder,createdAt:existing?.createdAt||new Date().toISOString(),createdBy:'Teacher/Admin',version:1}; setTests(prev=>existing?prev.map(x=>x.id===editingTestId?test:x):[test,...prev]); onSaved(); };
   const removeQ = index => { if(builder.questions.length===1)return alert('A test needs at least one question.'); setBuilder(prev=>({...prev,questions:prev.questions.filter((_,i)=>i!==index)}));setActiveIndex(Math.max(0,Math.min(activeIndex,builder.questions.length-2))); };
   return <div className="modal-backdrop test-builder-backdrop"><div className="test-builder modal-sheet"><div className="modal-head"><div><div className="card-kicker">TEST BUILDER</div><h2>{existing?'Edit test':'Create new test'}</h2></div><button className="close-btn" onClick={onClose}><CloseIcon /></button></div>
     <div className="builder-top-grid"><Field label="Test title" value={builder.title} onChange={v=>setBuilder({...builder,title:v})} placeholder="e.g. Economics Chapter Test" /><Field label="Test type" as="select" value={builder.type} onChange={v=>setBuilder({...builder,type:v})} options={['Practice Test','Class Test','Full Exam','Live Test']} /><Field label="Class" as="select" value={builder.className} onChange={v=>setBuilder({...builder,className:v})} options={CLASS_OPTIONS} /><Field label="Subject" as="select" value={builder.subject} onChange={v=>setBuilder({...builder,subject:v})} options={['SST','SCIENCE','MATH','ENGLISH']} /><Field label="Chapter / Any Topic" value={builder.topic} onChange={v=>setBuilder({...builder,topic:v})} placeholder="Chapter, unit or any topic" /><Field label="Timer (minutes) • max 360" value={builder.durationMinutes} onChange={v=>setBuilder({...builder,durationMinutes:Math.max(1,Math.min(360,Number(v.replace(/\D/g,''))||1))})} inputMode="numeric" /><div className="builder-option-card"><span><ShuffleIcon /> Random questions & options</span><button className={`toggle ${builder.randomize?'on':''}`} onClick={()=>setBuilder({...builder,randomize:!builder.randomize})} aria-label="Toggle randomization"><span></span></button></div><div className="builder-option-card"><span><MinusCircleIcon /> Negative marking</span><button className={`toggle ${builder.negativeEnabled?'on':''}`} onClick={()=>setBuilder({...builder,negativeEnabled:!builder.negativeEnabled})} aria-label="Toggle negative marking"><span></span></button>{builder.negativeEnabled&&<input className="mini-number" value={builder.negativeValue} onChange={e=>setBuilder({...builder,negativeValue:Math.max(0,Number(e.target.value)||0)})} step="0.25" type="number" min="0" />}</div></div>

@@ -67,3 +67,5 @@ html[data-theme="dark"] .portal-header,html[data-theme="dark"] .portal-card,html
 
 .form-error{margin:10px 0;padding:11px 13px;border:1px solid #f0b9b9;background:#fff2f2;color:#a83b3b;border-radius:12px;font-size:13px;line-height:1.4}
 .primary-btn:disabled{opacity:.65;cursor:not-allowed}
+
+.heading-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.sync-pill.synced{border-color:rgba(16,185,129,.28);background:rgba(16,185,129,.10);color:#047857}.sync-pill.loading{border-color:rgba(37,99,235,.22);background:rgba(37,99,235,.08);color:#1d4ed8}.sync-pill.error{border-color:rgba(220,38,38,.25);background:rgba(220,38,38,.08);color:#b91c1c}
