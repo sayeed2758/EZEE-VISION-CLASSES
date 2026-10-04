@@ -1,76 +1,42 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() {
-      return request.auth != null;
-    }
-
-    function myProfile() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid));
-    }
-
-    function isAdmin() {
-      return signedIn()
-        && myProfile().data.role == 'admin'
-        && myProfile().data.active == true;
-    }
-
-    function isTeacherOrAdmin() {
-      return signedIn()
-        && myProfile().data.active == true
-        && (myProfile().data.role == 'admin' || myProfile().data.role == 'teacher');
-    }
-
-    function publishedTest(testId) {
-      return exists(/databases/$(database)/documents/tests/$(testId))
-        && get(/databases/$(database)/documents/tests/$(testId)).data.published == true
-        && get(/databases/$(database)/documents/tests/$(testId)).data.publicAccess == true;
-    }
+    function signedIn() { return request.auth != null; }
+    function myProfile() { return get(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function isAdmin() { return signedIn() && myProfile().data.role == 'admin' && myProfile().data.active == true; }
+    function isTeacherOrAdmin() { return signedIn() && myProfile().data.active == true && (myProfile().data.role == 'admin' || myProfile().data.role == 'teacher'); }
 
     match /users/{uid} {
       allow read: if signedIn() && request.auth.uid == uid;
       allow create: if isAdmin();
       allow update, delete: if isAdmin();
     }
+    match /students/{id} { allow read, create, update, delete: if isTeacherOrAdmin(); }
+    match /attendance/{id} { allow read, create, update, delete: if isTeacherOrAdmin(); }
+    match /feeRecords/{id} { allow read, create, update, delete: if isTeacherOrAdmin(); }
 
-    match /students/{id} {
-      allow read, create, update, delete: if isTeacherOrAdmin();
-    }
-
-    match /attendance/{id} {
-      allow read, create, update, delete: if isTeacherOrAdmin();
-    }
-
-    match /feeRecords/{id} {
-      allow read, create, update, delete: if isTeacherOrAdmin();
-    }
-
+    // Published test documents contain ONLY student-safe question content.
+    // Answer keys live in the protected subcollection below.
     match /tests/{id} {
-      allow get: if (isTeacherOrAdmin()) || (!signedIn() && resource.data.published == true && resource.data.publicAccess == true);
+      allow get: if isTeacherOrAdmin() || (!signedIn() && resource.data.published == true && resource.data.publicAccess == true);
       allow list: if isTeacherOrAdmin();
       allow create, update, delete: if isTeacherOrAdmin();
 
+      match /answerKey/{questionId} {
+        allow read, write: if isTeacherOrAdmin();
+      }
       match /publicScores/{scoreId} {
-        allow read: if publishedTest(id);
-        allow create: if publishedTest(id)
-          && request.resource.data.keys().hasOnly(['score','totalMarks','percentage','submittedAt'])
-          && request.resource.data.score is number
-          && request.resource.data.totalMarks is number
-          && request.resource.data.percentage is number;
-        allow update, delete: if false;
+        allow read, write: if false;
       }
     }
 
-    match /questionBank/{id} {
-      allow read, create, update, delete: if isTeacherOrAdmin();
-    }
+    match /questionBank/{id} { allow read, create, update, delete: if isTeacherOrAdmin(); }
 
+    // Student submissions are accepted ONLY by the deployed callable Cloud Function,
+    // which uses Admin SDK. Direct client writes are blocked.
     match /testAttempts/{id} {
       allow read, update, delete: if isTeacherOrAdmin();
-      allow create: if isTeacherOrAdmin()
-        || (!signedIn()
-            && request.resource.data.portalSubmission == true
-            && publishedTest(request.resource.data.testId));
+      allow create: if false;
     }
   }
 }
