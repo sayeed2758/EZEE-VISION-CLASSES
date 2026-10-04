@@ -2,7 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const CLASS_OPTIONS = ['Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10'];
+const CLASS_OPTIONS = ['Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10'];
+const CLASS_FEE_DEFAULTS = { 'Class 4': 1000, 'Class 5': 1000, 'Class 6': 1000, 'Class 7': 1200, 'Class 8': 1200, 'Class 9': 1500, 'Class 10': 1500 };
+const PAYMENT_METHODS = ['Cash', 'UPI', 'Bank Transfer', 'Other'];
+const RECEIPT_TEACHERS = ['Shahid Sir', 'Enaam Sir', 'Zeeshan Sir', 'Abdur Rahman Sir'];
 const BATCH_OPTIONS = ['Morning A', 'Morning B', 'Evening A', 'Evening B'];
 const STATUS_OPTIONS = ['Active', 'Inactive'];
 const ATTENDANCE_STATUS = ['Present', 'Absent', 'Late'];
@@ -16,16 +19,16 @@ const navItems = [
 ];
 
 const seedStudents = [
-  { id: 'EV-1001', name: 'Aarav Kumar', guardian: 'Rajesh Kumar', phone: '9876543210', className: 'Class 10', batch: 'Morning A', fee: 'Paid', status: 'Active', joined: '02 Apr 2026' },
-  { id: 'EV-1002', name: 'Sana Parveen', guardian: 'Imran Parveen', phone: '9123456780', className: 'Class 10', batch: 'Evening A', fee: 'Pending', status: 'Active', joined: '05 Apr 2026' },
-  { id: 'EV-1003', name: 'Ritwik Sahu', guardian: 'Manoj Sahu', phone: '9988776655', className: 'Class 9', batch: 'Morning B', fee: 'Paid', status: 'Active', joined: '08 Apr 2026' },
-  { id: 'EV-1004', name: 'Ayesha Khan', guardian: 'Nadeem Khan', phone: '9012345678', className: 'Class 8', batch: 'Evening B', fee: 'Paid', status: 'Active', joined: '12 Apr 2026' },
-  { id: 'EV-1005', name: 'Aditya Pradhan', guardian: 'Sanjay Pradhan', phone: '9345678123', className: 'Class 7', batch: 'Morning A', fee: 'Partial', status: 'Active', joined: '18 Apr 2026' },
-  { id: 'EV-1006', name: 'Meher Fatima', guardian: 'Arif Ali', phone: '9090909090', className: 'Class 6', batch: 'Evening A', fee: 'Paid', status: 'Active', joined: '22 Apr 2026' }
+  { id: 'EV-1001', name: 'Aarav Kumar', guardian: 'Rajesh Kumar', phone: '9876543210', className: 'Class 10', batch: 'Morning A', monthlyFee: 1500, discount: 0, fee: 'Pending', status: 'Active', joined: '02 Apr 2026' },
+  { id: 'EV-1002', name: 'Sana Parveen', guardian: 'Imran Parveen', phone: '9123456780', className: 'Class 10', batch: 'Evening A', monthlyFee: 1500, discount: 200, fee: 'Partial', status: 'Active', joined: '05 Apr 2026' },
+  { id: 'EV-1003', name: 'Ritwik Sahu', guardian: 'Manoj Sahu', phone: '9988776655', className: 'Class 9', batch: 'Morning B', monthlyFee: 1500, discount: 0, fee: 'Pending', status: 'Active', joined: '08 Apr 2026' },
+  { id: 'EV-1004', name: 'Ayesha Khan', guardian: 'Nadeem Khan', phone: '9012345678', className: 'Class 8', batch: 'Evening B', monthlyFee: 1200, discount: 0, fee: 'Pending', status: 'Active', joined: '12 Apr 2026' },
+  { id: 'EV-1005', name: 'Aditya Pradhan', guardian: 'Sanjay Pradhan', phone: '9345678123', className: 'Class 7', batch: 'Morning A', monthlyFee: 1200, discount: 100, fee: 'Partial', status: 'Active', joined: '18 Apr 2026' },
+  { id: 'EV-1006', name: 'Meher Fatima', guardian: 'Arif Ali', phone: '9090909090', className: 'Class 6', batch: 'Evening A', monthlyFee: 1000, discount: 0, fee: 'Pending', status: 'Active', joined: '22 Apr 2026' }
 ];
 
 const emptyForm = {
-  name: '', guardian: '', phone: '', className: 'Class 10', batch: 'Morning A', fee: 'Pending', status: 'Active'
+  name: '', guardian: '', phone: '', className: 'Class 10', batch: 'Morning A', monthlyFee: CLASS_FEE_DEFAULTS['Class 10'], discount: 0, fee: 'Pending', status: 'Active'
 };
 
 function App() {
@@ -36,7 +39,13 @@ function App() {
   const [students, setStudents] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('ezee_students'));
-      return Array.isArray(saved) && saved.length ? saved.map(({ attendance, ...student }) => student) : seedStudents;
+      const raw = Array.isArray(saved) && saved.length ? saved.map(({ attendance, ...student }) => student) : seedStudents;
+      return raw.map(student => {
+        const fallback = CLASS_FEE_DEFAULTS[student.className] || 1500;
+        const monthlyFee = Number(student.monthlyFee ?? student.feeAmount ?? fallback) || fallback;
+        const discount = Number(student.discount || 0) || 0;
+        return { ...student, monthlyFee, discount };
+      });
     } catch {
       return seedStudents;
     }
@@ -54,6 +63,14 @@ function App() {
     date: dateKey(new Date()), className: 'Class 10', batch: 'Morning A', tab: 'daily', month: monthKey(new Date())
   }));
   const [printReport, setPrintReport] = useState(null);
+  const [feeRecords, setFeeRecords] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('ezee_fee_records'));
+      return Array.isArray(saved) ? saved : [];
+    } catch { return []; }
+  });
+  const [feePrefs, setFeePrefs] = useState(() => ({ month: monthKey(new Date()), className: 'Class 10', batch: 'Morning A', view: 'overview' }));
+  const [feeModal, setFeeModal] = useState(null);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -74,7 +91,11 @@ function App() {
   }, [attendanceRecords]);
 
   useEffect(() => {
-    const afterPrint = () => setPrintReport(null);
+    localStorage.setItem('ezee_fee_records', JSON.stringify(feeRecords));
+  }, [feeRecords]);
+
+  useEffect(() => {
+    const afterPrint = () => { setPrintReport(null); document.body.classList.remove('printing-receipt'); };
     window.addEventListener('afterprint', afterPrint);
     return () => window.removeEventListener('afterprint', afterPrint);
   }, []);
@@ -99,11 +120,11 @@ function App() {
   const openStudentEdit = (id) => { setSelectedStudentId(id); setModal('edit'); };
   const addStudent = (payload) => {
     const nextNumber = students.reduce((max, s) => Math.max(max, Number(String(s.id).replace(/\D/g, '')) || 1000), 1000) + 1;
-    setStudents([{ ...payload, id: `EV-${nextNumber}`, joined: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) }, ...students]);
+    setStudents([{ ...payload, monthlyFee: Number(payload.monthlyFee) || CLASS_FEE_DEFAULTS[payload.className] || 0, discount: Number(payload.discount) || 0, id: `EV-${nextNumber}`, joined: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) }, ...students]);
     setModal(null);
   };
   const updateStudent = (payload) => {
-    setStudents(students.map(s => s.id === payload.id ? { ...s, ...payload } : s));
+    setStudents(students.map(s => s.id === payload.id ? { ...s, ...payload, monthlyFee: Number(payload.monthlyFee) || 0, discount: Number(payload.discount) || 0 } : s));
     setModal(null);
   };
   const deleteStudent = (id) => {
@@ -116,6 +137,7 @@ function App() {
       const next = { ...attendanceRecords };
       Object.keys(next).forEach(key => { delete next[key][id]; });
       setAttendanceRecords(next);
+      setFeeRecords(records => records.filter(r => r.studentId !== id));
     }
   };
 
@@ -137,9 +159,10 @@ function App() {
       </header>
 
       <main className="main-content">
-        {screen === 'home' ? <Dashboard dateText={dateText} timeText={timeText} students={students} attendanceStats={attendanceStatsByStudent} attendanceAverage={attendanceAverage} onNavigate={setScreen} /> :
+        {screen === 'home' ? <Dashboard dateText={dateText} timeText={timeText} students={students} attendanceStats={attendanceStatsByStudent} attendanceAverage={attendanceAverage} feeRecords={feeRecords} onNavigate={setScreen} /> :
          screen === 'students' ? <StudentsPage students={students} attendanceStats={attendanceStatsByStudent} view={studentView} selectedStudentId={selectedStudentId} onView={openStudent} onEdit={openStudentEdit} onDelete={deleteStudent} onBack={() => { setStudentView('list'); setSelectedStudentId(null); }} onAdd={() => { setModal('add'); setSelectedStudentId(null); }} /> :
          screen === 'attendance' ? <AttendancePage students={students} attendanceRecords={attendanceRecords} setAttendanceRecords={setAttendanceRecords} prefs={attendancePrefs} updatePrefs={updateAttendancePrefs} onBack={() => setScreen('home')} onPrint={setPrintReport} /> :
+         screen === 'fees' ? <FeeManager students={students} setStudents={setStudents} feeRecords={feeRecords} setFeeRecords={setFeeRecords} prefs={feePrefs} setPrefs={setFeePrefs} feeModal={feeModal} setFeeModal={setFeeModal} /> :
          screen === 'profile' ? <Profile onLogout={logout} /> :
          <ModulePlaceholder screen={screen} onBack={() => setScreen('home')} />}
       </main>
@@ -172,9 +195,15 @@ function Login({ onLogin, dark, setDark }) {
   </div>;
 }
 
-function Dashboard({ dateText, timeText, students, attendanceStats, attendanceAverage, onNavigate }) {
+function Dashboard({ dateText, timeText, students, attendanceStats, attendanceAverage, feeRecords, onNavigate }) {
   const active = students.filter(s => s.status === 'Active').length;
-  const pending = students.filter(s => s.fee !== 'Paid').length;
+  const currentMonth = monthKey(new Date());
+  const pending = students.filter(s => {
+    if (s.status !== 'Active') return false;
+    const netFee = Math.max(0, Number(s.monthlyFee || CLASS_FEE_DEFAULTS[s.className] || 0) - Number(s.discount || 0));
+    const paid = (feeRecords || []).filter(r => r.studentId === s.id && r.month === currentMonth).reduce((n, r) => n + Number(r.amount || 0), 0);
+    return Math.max(0, netFee - paid) > 0;
+  }).length;
   return <>
     <section className="hero-card"><div className="hero-copy"><div className="eyebrow light"><span className="dot" /> TEACHER / ADMIN</div><h1>Good evening,<br /><strong>Shahid Sir.</strong></h1><p>{dateText}</p><div className="live-time"><span className="pulse" /> {timeText} <span className="live-label">LIVE</span></div></div><div className="hero-orb"><img src="/assets/ezee-vision-logo.png" alt="EZEE Vision logo" /></div></section>
     <section className="section-block"><div className="section-head"><div><h2>Today at a glance</h2><p className="section-caption">Live figures from your saved student and attendance records.</p></div></div><div className="stats-grid"><Stat value={active} label="Active students" change={`${students.length} total records`} tone="mint" icon={<UsersIcon />} /><Stat value={attendanceAverage ? `${attendanceAverage}%` : '—'} label="Attendance average" change={attendanceAverage ? 'Based on attendance records' : 'No attendance saved yet'} tone="blue" icon={<CalendarCheckIcon />} /><Stat value={pending} label="Fee follow-ups" change="Students with dues" tone="gold" icon={<ReceiptIcon />} /></div></section>
@@ -184,7 +213,7 @@ function Dashboard({ dateText, timeText, students, attendanceStats, attendanceAv
       <QuickAction icon={<ReceiptIcon />} label="Fees" sub="Payments & dues" screen="fees" tone="gold" onNavigate={onNavigate} />
       <QuickAction icon={<ClipboardIcon />} label="Tests" sub="Tests & results" screen="tests" tone="violet" onNavigate={onNavigate} />
     </div></section>
-    <section className="two-col"><div className="panel"><div className="section-head"><div><h2>Attendance shortcut</h2><p className="section-caption">Go straight to today and record one attendance per student.</p></div><button className="icon-action" onClick={() => onNavigate('attendance')} aria-label="Open attendance"><ArrowRightIcon /></button></div><div className="attendance-shortcut"><div className="shortcut-icon"><CalendarCheckIcon /></div><div><strong>Attendance Pro</strong><span>Daily • Monthly • A4 export</span></div><button className="secondary-btn compact" onClick={() => onNavigate('attendance')}><CalendarCheckIcon /> Open</button></div></div><div className="panel accent-panel"><div className="card-kicker">PHASE 3</div><h2>Attendance is now the daily workflow.</h2><p className="muted">Mark Present, Absent or Late, edit past dates, and share polished daily attendance reports.</p></div></section>
+    <section className="two-col"><div className="panel"><div className="section-head"><div><h2>Attendance shortcut</h2><p className="section-caption">Go straight to today and record one attendance per student.</p></div><button className="icon-action" onClick={() => onNavigate('attendance')} aria-label="Open attendance"><ArrowRightIcon /></button></div><div className="attendance-shortcut"><div className="shortcut-icon"><CalendarCheckIcon /></div><div><strong>Attendance Pro</strong><span>Daily • Monthly • A4 export</span></div><button className="secondary-btn compact" onClick={() => onNavigate('attendance')}><CalendarCheckIcon /> Open</button></div></div><div className="panel accent-panel"><div className="card-kicker">PHASE 4</div><h2>Fees are now part of the daily workflow.</h2><p className="muted">Set each student’s monthly amount, apply a fixed discount, collect partial payments and generate branded receipts.</p></div></section>
     <div className="watermark">Made With ❤️ By Shahid Sir</div>
   </>;
 }
@@ -211,7 +240,7 @@ function StudentsPage({ students, attendanceStats, view, selectedStudentId, onVi
 
   return <section className="students-page">
     <div className="page-heading"><div><div className="eyebrow"><span className="dot" /> STUDENT MANAGEMENT</div><h1>Students</h1><p>One place for learner profiles, classes and batches.</p></div><button className="primary-btn add-btn" onClick={onAdd}><PlusIcon /> Add student</button></div>
-    <div className="student-stats"><MiniStat value={students.length} label="Total" icon={<UsersIcon />} /><MiniStat value={students.filter(s => s.status === 'Active').length} label="Active" icon={<CheckCircleIcon />} /><MiniStat value={students.filter(s => s.fee !== 'Paid').length} label="Fee follow-ups" icon={<ReceiptIcon />} /></div>
+    <div className="student-stats"><MiniStat value={students.length} label="Total" icon={<UsersIcon />} /><MiniStat value={students.filter(s => s.status === 'Active').length} label="Active" icon={<CheckCircleIcon />} /><MiniStat value={students.filter(s => s.status === 'Active').filter(s => s.fee !== 'Paid').length} label="Fee follow-ups" icon={<ReceiptIcon />} /></div>
     <div className="students-toolbar panel"><div className="search-box"><SearchIcon /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search name, ID, guardian or phone" /></div><div className="filter-row"><select value={classFilter} onChange={e => setClassFilter(e.target.value)} aria-label="Filter by class"><option>All classes</option>{CLASS_OPTIONS.map(o => <option key={o}>{o}</option>)}</select><select value={batchFilter} onChange={e => setBatchFilter(e.target.value)} aria-label="Filter by batch"><option>All batches</option>{BATCH_OPTIONS.map(o => <option key={o}>{o}</option>)}</select><select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Filter by status"><option>All</option>{STATUS_OPTIONS.map(o => <option key={o}>{o}</option>)}</select></div></div>
     <div className="student-list-header"><span>{filtered.length} student{filtered.length !== 1 ? 's' : ''}</span><span>Tap a card to open profile</span></div>
     <div className="student-grid">{filtered.map(student => <StudentCard key={student.id} student={student} attendance={attendanceStats[student.id]} onOpen={() => onView(student.id)} onEdit={() => onEdit(student.id)} />)}</div>
@@ -226,7 +255,7 @@ function StudentCard({ student, attendance, onOpen, onEdit }) {
   return <article className="student-card panel" onClick={onOpen} role="button" tabIndex={0} onKeyDown={e => e.key === 'Enter' && onOpen()}>
     <div className="student-card-top"><div className="student-avatar">{initials(student.name)}</div><div className="student-main"><strong>{student.name}</strong><span>{student.id} • {student.className}</span></div><button className="more-btn" aria-label="Edit student" onClick={e => { e.stopPropagation(); onEdit(); }}><MoreIcon /></button></div>
     <div className="student-meta"><span>{student.batch}</span><span>{student.phone}</span></div>
-    <div className="student-card-bottom"><div><small>Attendance</small><strong>{attendance?.percentage === null || attendance?.percentage === undefined ? '—' : `${attendance.percentage}%`}</strong></div><div><small>Fee</small><strong className={student.fee.toLowerCase()}>{student.fee}</strong></div><span className={`status-chip ${student.status.toLowerCase()}`}>{student.status}</span></div>
+    <div className="student-card-bottom"><div><small>Attendance</small><strong>{attendance?.percentage === null || attendance?.percentage === undefined ? '—' : `${attendance.percentage}%`}</strong></div><div><small>Monthly fee</small><strong>₹{money(Math.max(0, Number(student.monthlyFee || CLASS_FEE_DEFAULTS[student.className] || 0) - Number(student.discount || 0)))}</strong></div><span className={`status-chip ${student.status.toLowerCase()}`}>{student.status}</span></div>
   </article>;
 }
 
@@ -234,7 +263,7 @@ function StudentDetail({ student, attendance, onBack, onEdit, onDelete }) {
   return <section className="detail-page">
     <button className="back-btn" onClick={onBack}><ChevronLeftIcon /> Back to students</button>
     <div className="detail-hero panel"><div className="detail-avatar">{initials(student.name)}</div><div className="detail-title"><div className="eyebrow"><span className="dot" /> STUDENT PROFILE</div><h1>{student.name}</h1><p>{student.id} • {student.className} • {student.batch}</p></div><div className="detail-actions"><button className="secondary-btn" onClick={onEdit}><EditIcon /> Edit</button><button className="danger-btn" onClick={onDelete}><TrashIcon /> Delete</button></div></div>
-    <div className="detail-grid"><div className="panel"><div className="section-head"><h2>Profile details</h2></div><InfoRow label="Guardian" value={student.guardian} /><InfoRow label="Phone" value={student.phone} /><InfoRow label="Joined" value={student.joined} /><InfoRow label="Status" value={student.status} /></div><div className="panel"><div className="section-head"><h2>Attendance snapshot</h2><span className="pill">Phase 3</span></div><div className="detail-metric"><span>Attendance</span><strong>{attendance?.percentage === null || attendance?.percentage === undefined ? 'No records' : `${attendance.percentage}%`}</strong></div><div className="metric-bar"><span style={{ width: `${Math.min(100, Number(attendance?.percentage) || 0)}%` }} /></div><div className="detail-metric"><span>Present</span><strong>{attendance?.present ?? 0}</strong></div><div className="detail-metric"><span>Absent</span><strong>{attendance?.absent ?? 0}</strong></div><div className="detail-metric"><span>Late</span><strong>{attendance?.late ?? 0}</strong></div><div className="detail-metric"><span>Classes counted</span><strong>{attendance?.total ?? 0}</strong></div></div></div>
+    <div className="detail-grid"><div className="panel"><div className="section-head"><h2>Profile details</h2></div><InfoRow label="Guardian" value={student.guardian} /><InfoRow label="Phone" value={student.phone} /><InfoRow label="Joined" value={student.joined} /><InfoRow label="Status" value={student.status} /><InfoRow label="Monthly fee" value={`₹${money(student.monthlyFee || 0)}`} /><InfoRow label="Discount" value={`₹${money(student.discount || 0)}`} /></div><div className="panel"><div className="section-head"><h2>Attendance snapshot</h2><span className="pill">Phase 3</span></div><div className="detail-metric"><span>Attendance</span><strong>{attendance?.percentage === null || attendance?.percentage === undefined ? 'No records' : `${attendance.percentage}%`}</strong></div><div className="metric-bar"><span style={{ width: `${Math.min(100, Number(attendance?.percentage) || 0)}%` }} /></div><div className="detail-metric"><span>Present</span><strong>{attendance?.present ?? 0}</strong></div><div className="detail-metric"><span>Absent</span><strong>{attendance?.absent ?? 0}</strong></div><div className="detail-metric"><span>Late</span><strong>{attendance?.late ?? 0}</strong></div><div className="detail-metric"><span>Classes counted</span><strong>{attendance?.total ?? 0}</strong></div></div></div>
     <div className="coming-card"><strong>Attendance is now record-based.</strong><span>Attendance percentage is calculated only from saved daily attendance entries. It can be edited later from Attendance Pro.</span></div>
     <div className="watermark">Made With ❤️ By Shahid Sir</div>
   </section>;
@@ -244,12 +273,17 @@ function InfoRow({ label, value }) { return <div className="profile-list-row"><s
 function StudentModal({ title, submitLabel, student, onClose, onSubmit }) {
   const [form, setForm] = useState(() => student ? { ...student } : { ...emptyForm });
   const set = (key, value) => setForm(f => ({ ...f, [key]: value }));
-  const submit = (e) => { e.preventDefault(); if (!form.name.trim() || !form.guardian.trim() || !/^\d{10}$/.test(form.phone)) return; onSubmit({ ...form }); };
+  const changeClass = (value) => {
+    setForm(f => ({ ...f, className: value, monthlyFee: student ? f.monthlyFee : (CLASS_FEE_DEFAULTS[value] || f.monthlyFee) }));
+  };
+  const submit = (e) => { e.preventDefault(); if (!form.name.trim() || !form.guardian.trim() || !/^\d{10}$/.test(form.phone)) return; onSubmit({ ...form, monthlyFee: Math.max(0, Number(form.monthlyFee) || 0), discount: Math.max(0, Number(form.discount) || 0) }); };
+  const netFee = Math.max(0, Number(form.monthlyFee) - Number(form.discount || 0));
   return <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}><div className="modal-sheet" role="dialog" aria-modal="true"><div className="modal-head"><div><div className="card-kicker">STUDENT RECORD</div><h2>{title}</h2></div><button className="close-btn" onClick={onClose} aria-label="Close"><CloseIcon /></button></div><form onSubmit={submit}>
     <div className="form-grid"><Field label="Student name" value={form.name} onChange={v => set('name', v)} placeholder="Enter full name" required /><Field label="Guardian name" value={form.guardian} onChange={v => set('guardian', v)} placeholder="Parent / guardian" required /><Field label="Phone" value={form.phone} onChange={v => set('phone', v.replace(/\D/g, '').slice(0,10))} placeholder="10-digit mobile" inputMode="numeric" required /></div>
-    <div className="form-grid"><SelectField label="Class" value={form.className} onChange={v => set('className', v)} options={CLASS_OPTIONS} /><SelectField label="Batch" value={form.batch} onChange={v => set('batch', v)} options={BATCH_OPTIONS} /><SelectField label="Fee status" value={form.fee} onChange={v => set('fee', v)} options={['Paid','Pending','Partial']} /></div>
+    <div className="form-grid"><SelectField label="Class" value={form.className} onChange={changeClass} options={CLASS_OPTIONS} /><SelectField label="Batch" value={form.batch} onChange={v => set('batch', v)} options={BATCH_OPTIONS} /><SelectField label="Fee status" value={form.fee} onChange={v => set('fee', v)} options={['Paid','Pending','Partial']} /></div>
+    <div className="form-grid"><Field label="Monthly fee (₹)" value={form.monthlyFee} onChange={v => set('monthlyFee', v.replace(/\D/g, '').slice(0,6))} placeholder="Class default" inputMode="numeric" /><Field label="Discount (₹ fixed)" value={form.discount} onChange={v => set('discount', v.replace(/\D/g, '').slice(0,6))} placeholder="0" inputMode="numeric" /><Field label="Net payable (₹)" value={netFee} onChange={() => {}} placeholder="Auto" /></div>
     <div className="form-grid"><SelectField label="Record status" value={form.status} onChange={v => set('status', v)} options={STATUS_OPTIONS} /></div>
-    <div className="form-note"><CalendarCheckIcon /> Attendance is managed separately in Attendance Pro and is never typed manually here.</div>
+    <div className="form-note"><ReceiptIcon /> Monthly fee is stored on the student profile. Discount is a fixed ₹ amount and the net payable is calculated automatically.</div>
     <div className="modal-footer"><button type="button" className="secondary-btn" onClick={onClose}><CloseIcon /> Cancel</button><button type="submit" className="primary-btn"><SaveIcon /> {submitLabel}</button></div>
   </form></div></div>;
 }
@@ -362,7 +396,142 @@ function MonthlyAttendanceReport({ data, prefs, updatePrefs, onDownload, onShare
 }
 function MetricCell({ label, value, tone }) { return <div className={`metric-cell ${tone || ''}`}><small>{label}</small><strong>{value}</strong></div>; }
 
-function ModulePlaceholder({ screen, onBack }) { const data = { fees: ['Fee Manager', 'Payments, pending fees and branded receipts.', ReceiptIcon], tests: ['Test Center', 'Create tests, manage attempts and results.', ClipboardIcon] }; const [title, subtitle, Icon] = data[screen] || ['Module','Module coming next.', SparklesIcon]; return <section className="module-page"><button className="back-btn" onClick={onBack}><ChevronLeftIcon /> Back to dashboard</button><div className="module-icon"><Icon /></div><div className="eyebrow"><span className="dot" /> NEXT PHASE</div><h1>{title}</h1><p>{subtitle}</p><div className="coming-card"><strong>Attendance Pro is complete in Phase 3.</strong><span>{title} remains intentionally scoped for the next module build.</span></div></section>; }
+function FeeManager({ students, setStudents, feeRecords, setFeeRecords, prefs, setPrefs, feeModal, setFeeModal }) {
+  const [selectedStudentId, setSelectedStudentId] = useState(null);
+  const [receiptDraft, setReceiptDraft] = useState(null);
+  const [query, setQuery] = useState('');
+  const activeStudents = students.filter(s => s.status === 'Active');
+  const monthStudents = activeStudents.filter(s => (!prefs.className || s.className === prefs.className) && (!prefs.batch || s.batch === prefs.batch));
+  const summaries = useMemo(() => feeSummaryForStudents(monthStudents, prefs.month, feeRecords), [monthStudents, prefs.month, feeRecords]);
+  const totalDue = summaries.reduce((n, s) => n + s.netFee, 0);
+  const totalPaid = summaries.reduce((n, s) => n + s.paid, 0);
+  const totalPending = summaries.reduce((n, s) => n + s.balance, 0);
+  const partialCount = summaries.filter(s => s.status === 'Partial').length;
+  const pendingCount = summaries.filter(s => s.status === 'Pending').length;
+  const paidCount = summaries.filter(s => s.status === 'Paid').length;
+  const filtered = summaries.filter(s => {
+    const q = query.trim().toLowerCase();
+    return !q || [s.student.name, s.student.id, s.student.guardian, s.student.phone].some(v => String(v).toLowerCase().includes(q));
+  });
+  const selected = students.find(s => s.id === selectedStudentId);
+  const monthLabelText = monthLabel(prefs.month);
+
+  const collect = (student) => setFeeModal({ type: 'collect', studentId: student.id, month: prefs.month });
+  const editFee = (student) => { setSelectedStudentId(student.id); setFeeModal({ type: 'profile', studentId: student.id }); };
+  const savePayment = (payload) => {
+    const baseFee = Number(payload.student.monthlyFee || CLASS_FEE_DEFAULTS[payload.student.className] || 0);
+    const discount = Number(payload.student.discount || 0);
+    const netFee = Math.max(0, baseFee - discount);
+    const currentPaid = feeRecords.filter(r => r.studentId === payload.student.id && r.month === payload.month).reduce((n, r) => n + Number(r.amount || 0), 0);
+    const balanceBefore = Math.max(0, netFee - currentPaid);
+    const amount = Math.min(balanceBefore, Math.max(0, Number(payload.amount) || 0));
+    if (!amount || amount > balanceBefore) return;
+    const payment = { id: `PAY-${Date.now()}`, studentId: payload.student.id, month: payload.month, amount, paymentMethod: payload.paymentMethod, date: payload.date, teacher: payload.teacher, receiptNo: payload.receiptNo, note: payload.note || '', baseFee, discount, netFee, balanceAfter: Math.max(0, netFee - currentPaid - amount) };
+    setFeeRecords(prev => [...prev, payment]);
+    setStudents(prev => prev.map(s => s.id === payload.student.id ? { ...s, fee: currentPaid + amount >= netFee ? 'Paid' : 'Partial' } : s));
+    setFeeModal(null);
+    setReceiptDraft({ payment, student: payload.student });
+  };
+  const saveProfileFee = (payload) => {
+    setStudents(prev => prev.map(s => s.id === payload.studentId ? { ...s, monthlyFee: Math.max(0, Number(payload.monthlyFee) || 0), discount: Math.max(0, Number(payload.discount) || 0) } : s));
+    setFeeModal(null);
+  };
+  const printReceipt = (payment, student) => { setReceiptDraft({ payment, student }); document.body.classList.add('printing-receipt'); setTimeout(() => window.print(), 100); };
+  const shareReceipt = async (payment, student) => {
+    const text = receiptShareText(payment, student);
+    if (navigator.share) { try { await navigator.share({ title: `Receipt ${payment.receiptNo}`, text }); return; } catch {} }
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+  };
+  const currentTransactions = feeRecords.filter(r => r.month === prefs.month && monthStudents.some(s => s.id === r.studentId)).sort((a,b) => String(b.date).localeCompare(String(a.date)));
+
+  return <section className="fees-page">
+    <div className="page-heading"><div><div className="eyebrow"><span className="dot" /> FEE MANAGER</div><h1>Fees</h1><p>Monthly collection, student-wise dues and branded receipts.</p></div><button className="primary-btn add-btn" onClick={() => setFeeModal({ type: 'collect', studentId: monthStudents[0]?.id || null, month: prefs.month })} disabled={!monthStudents.length}><ReceiptIcon /> Collect fee</button></div>
+    <div className="fee-summary-grid">
+      <MiniStat value={`₹${money(totalDue)}`} label="Monthly net due" icon={<WalletIcon />} />
+      <MiniStat value={`₹${money(totalPaid)}`} label="Collected" icon={<CheckCircleIcon />} />
+      <MiniStat value={`₹${money(totalPending)}`} label="Pending balance" icon={<ClockIcon />} />
+      <MiniStat value={`${paidCount}/${summaries.length}`} label="Paid students" icon={<UsersIcon />} />
+    </div>
+    <div className="panel fee-controls"><div className="control-grid"><label className="form-field"><span>Month</span><input type="month" value={prefs.month} onChange={e => setPrefs(p => ({ ...p, month: e.target.value }))} /></label><SelectField label="Class" value={prefs.className} onChange={v => setPrefs(p => ({ ...p, className: v }))} options={CLASS_OPTIONS} /><SelectField label="Batch" value={prefs.batch} onChange={v => setPrefs(p => ({ ...p, batch: v }))} options={BATCH_OPTIONS} /></div></div>
+    <div className="fee-tabs"><button className={prefs.view==='overview'?'tab-btn active':'tab-btn'} onClick={() => setPrefs(p => ({...p,view:'overview'}))}><BarChartIcon /> Overview</button><button className={prefs.view==='ledger'?'tab-btn active':'tab-btn'} onClick={() => setPrefs(p => ({...p,view:'ledger'}))}><ReceiptIcon /> Ledger</button><button className={prefs.view==='structure'?'tab-btn active':'tab-btn'} onClick={() => setPrefs(p => ({...p,view:'structure'}))}><WalletIcon /> Fee structure</button></div>
+    {prefs.view === 'overview' && <>
+      <div className="fee-overview-grid">
+        <div className="panel"><div className="section-head"><div><div className="card-kicker">MONTHLY COLLECTION</div><h2>{monthLabelText}</h2><p className="section-caption">Due date is the 10th of every month. No late fee is applied.</p></div><span className="pill"><CalendarIcon /> 10th due</span></div><div className="fee-status-bars"><div><span>Paid</span><strong>{paidCount}</strong></div><div><span>Partial</span><strong>{partialCount}</strong></div><div><span>Pending</span><strong>{pendingCount}</strong></div></div><div className="collection-progress"><span style={{width:`${totalDue ? Math.min(100, totalPaid/totalDue*100) : 0}%`}} /></div><div className="collection-progress-meta"><span>₹{money(totalPaid)} collected</span><strong>{totalDue ? Math.round(totalPaid/totalDue*100) : 0}%</strong></div></div>
+        <div className="panel fee-class-card"><div className="card-kicker">CLASS DEFAULTS</div><h2>Monthly fee benchmark</h2><div className="class-fee-mini-grid">{CLASS_OPTIONS.map(c => <div key={c}><span>{c.replace('Class ','Class ')}</span><strong>₹{money(CLASS_FEE_DEFAULTS[c])}</strong></div>)}</div><p className="form-note"><EditIcon /> Individual monthly amount and fixed discount are controlled from each student profile.</p></div>
+      </div>
+      <div className="panel"><div className="section-head"><div><h2>Student fee ledger</h2><p className="section-caption">Collect exactly the remaining balance, including partial payments.</p></div><div className="search-box fee-search"><SearchIcon /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search student, ID, guardian or phone" /></div></div><FeeStudentTable rows={filtered} month={prefs.month} onCollect={collect} onEdit={editFee} onReceipt={payment => { const stu = students.find(s => s.id === payment.studentId); setReceiptDraft({payment, student:stu}); }} /></div>
+    </>}
+    {prefs.view === 'ledger' && <div className="panel"><div className="section-head"><div><div className="card-kicker">PAYMENT HISTORY</div><h2>{monthLabelText} transactions</h2><p className="section-caption">Every installment is kept separately for full payment history.</p></div></div><div className="payment-list">{currentTransactions.length ? currentTransactions.map(p => { const s = students.find(st => st.id === p.studentId); return <div className="payment-row" key={p.id}><div className="payment-method-icon"><PaymentMethodIcon method={p.paymentMethod} /></div><div className="payment-main"><strong>{s?.name || p.studentId}</strong><span>{p.receiptNo} • {formatDate(p.date)} • {p.teacher}</span></div><div className="payment-amount"><strong>₹{money(p.amount)}</strong><span>{p.paymentMethod}</span></div><button className="icon-action" onClick={() => setReceiptDraft({payment:p, student:s})} aria-label="Open receipt"><ReceiptIcon /></button></div> }) : <div className="empty-state"><div className="empty-icon"><ReceiptIcon /></div><h3>No payments in this month</h3><p>Collected payments will appear here with their receipt numbers.</p></div>}</div></div>}
+    {prefs.view === 'structure' && <div className="panel"><div className="section-head"><div><div className="card-kicker">FEE STRUCTURE</div><h2>Class-wise default monthly fees</h2><p className="section-caption">These are the defaults you provided. Student profiles may override the amount.</p></div></div><div className="fee-structure-table">{CLASS_OPTIONS.map(c => <div className="fee-structure-row" key={c}><div className="fee-class-icon"><WalletIcon /></div><strong>{c}</strong><span>₹{money(CLASS_FEE_DEFAULTS[c])} / month</span></div>)}</div></div>}
+    <div className="watermark">Made With ❤️ By Shahid Sir</div>
+    {feeModal?.type === 'collect' && <FeeCollectModal students={monthStudents} month={feeModal.month} defaultStudentId={feeModal.studentId} feeRecords={feeRecords} onClose={() => setFeeModal(null)} onSubmit={savePayment} />}
+    {feeModal?.type === 'profile' && selected && <FeeProfileModal student={selected} onClose={() => setFeeModal(null)} onSubmit={saveProfileFee} />}
+    {receiptDraft && <ReceiptPreview payment={receiptDraft.payment} student={receiptDraft.student} onClose={() => setReceiptDraft(null)} onPrint={printReceipt} onShare={shareReceipt} />}
+  </section>;
+}
+
+function FeeStudentTable({ rows, month, onCollect, onEdit, onReceipt }) {
+  return <div className="fee-student-list">{rows.length ? rows.map((row, i) => <div className="fee-student-row" key={row.student.id}><div className="serial">{i+1}</div><div className="mini-avatar">{initials(row.student.name)}</div><div className="fee-student-main"><strong>{row.student.name}</strong><span>{row.student.id} • {row.student.className} • {row.student.batch}</span></div><div className="fee-money"><small>Net</small><strong>₹{money(row.netFee)}</strong></div><div className="fee-money"><small>Paid</small><strong className="paid-text">₹{money(row.paid)}</strong></div><div className="fee-money"><small>Balance</small><strong className={row.balance ? 'pending-text' : 'paid-text'}>₹{money(row.balance)}</strong></div><span className={`fee-badge ${row.status.toLowerCase()}`}>{row.status}</span><div className="fee-row-actions">{row.balance > 0 ? <button className="primary-btn compact" onClick={() => onCollect(row.student)}><ReceiptIcon /> Collect</button> : <button className="secondary-btn compact" disabled={!row.transactions.length} onClick={() => onReceipt(row.transactions[row.transactions.length-1])}><ReceiptIcon /> Receipt</button>}<button className="icon-action" onClick={() => onEdit(row.student)} aria-label="Edit fee profile"><EditIcon /></button></div></div>) : <div className="empty-state"><div className="empty-icon"><UsersIcon /></div><h3>No students in this class and batch</h3><p>Choose another filter or add active students.</p></div>}</div>;
+}
+
+function FeeCollectModal({ students, month, defaultStudentId, feeRecords, onClose, onSubmit }) {
+  const defaultStudent = students.find(s => s.id === defaultStudentId) || students[0];
+  const [studentId, setStudentId] = useState(defaultStudent?.id || '');
+  const student = students.find(s => s.id === studentId) || defaultStudent;
+  const alreadyPaid = student ? feeRecords.filter(r => r.studentId === student.id && r.month === month).reduce((n, r) => n + Number(r.amount || 0), 0) : 0;
+  const netFee = student ? Math.max(0, Number(student.monthlyFee || CLASS_FEE_DEFAULTS[student.className] || 0) - Number(student.discount || 0)) : 0;
+  const balance = Math.max(0, netFee - alreadyPaid);
+  const [amount, setAmount] = useState(balance ? String(balance) : '');
+  const [paymentMethod, setPaymentMethod] = useState('Cash');
+  const [date, setDate] = useState(dateKey(new Date()));
+  const [teacher, setTeacher] = useState(RECEIPT_TEACHERS[0]);
+  const [receiptNo, setReceiptNo] = useState('');
+  const [note, setNote] = useState('');
+  useEffect(() => { setAmount(balance ? String(balance) : ''); }, [studentId, month, balance]);
+  if (!student) return <div className="modal-backdrop"><div className="modal-sheet"><div className="modal-head"><h2>No student available</h2><button className="close-btn" onClick={onClose}><CloseIcon /></button></div><p className="muted">Add an active student in this class and batch first.</p></div></div>;
+  const submit = e => { e.preventDefault(); const value = Number(amount) || 0; if (!value || value > balance) return; if (!receiptNo.trim()) return; onSubmit({ student, month, amount:value, paymentMethod, date, teacher, receiptNo: receiptNo.trim(), note }); };
+  return <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}><div className="modal-sheet fee-modal-sheet"><div className="modal-head"><div><div className="card-kicker">COLLECT FEE</div><h2>{student.name}</h2></div><button className="close-btn" onClick={onClose}><CloseIcon /></button></div><form onSubmit={submit}><div className="fee-collect-top"><div className="mini-avatar big">{initials(student.name)}</div><div><strong>{student.id}</strong><span>{student.className} • {student.batch}</span></div><div className="balance-highlight"><small>Balance</small><strong>₹{money(balance)}</strong></div></div><div className="form-grid"><SelectField label="Student" value={studentId} onChange={setStudentId} options={students.map(s => s.id)} /><Field label="Payment amount (₹)" value={amount} onChange={v => setAmount(v.replace(/\D/g,'').slice(0,6))} placeholder="Enter amount" inputMode="numeric" required /><SelectField label="Payment method" value={paymentMethod} onChange={setPaymentMethod} options={PAYMENT_METHODS} /></div><div className="form-grid"><Field label="Payment date" value={date} onChange={setDate} placeholder="YYYY-MM-DD" required /><SelectField label="Receipt authorized by" value={teacher} onChange={setTeacher} options={RECEIPT_TEACHERS} /><Field label="Receipt number" value={receiptNo} onChange={setReceiptNo} placeholder="Enter your receipt format" required /></div><div className="form-grid"><Field label="Note (optional)" value={note} onChange={setNote} placeholder="e.g. August fee" /><Field label="Monthly net fee" value={netFee} onChange={() => {}} placeholder="Auto" /></div><div className="form-note"><ReceiptIcon /> Due date: 10th • No late fee • Partial payments are supported • Receipt uses landscape blue & white design.</div><div className="modal-footer"><button type="button" className="secondary-btn" onClick={onClose}><CloseIcon /> Cancel</button><button className="primary-btn" type="submit"><ReceiptIcon /> Save & generate receipt</button></div></form></div></div>;
+}
+
+function FeeProfileModal({ student, onClose, onSubmit }) {
+  const [monthlyFee, setMonthlyFee] = useState(String(student.monthlyFee || CLASS_FEE_DEFAULTS[student.className] || 0));
+  const [discount, setDiscount] = useState(String(student.discount || 0));
+  const net = Math.max(0, Number(monthlyFee) - Number(discount));
+  return <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}><div className="modal-sheet"><div className="modal-head"><div><div className="card-kicker">FEE PROFILE</div><h2>{student.name}</h2></div><button className="close-btn" onClick={onClose}><CloseIcon /></button></div><div className="form-grid"><Field label="Monthly fee (₹)" value={monthlyFee} onChange={v => setMonthlyFee(v.replace(/\D/g,''))} placeholder="Amount" inputMode="numeric" /><Field label="Discount (₹ fixed)" value={discount} onChange={v => setDiscount(v.replace(/\D/g,''))} placeholder="0" inputMode="numeric" /><Field label="Net payable (₹)" value={net} onChange={() => {}} placeholder="Auto" /></div><div className="form-note"><WalletIcon /> Example: Class 10 default ₹1500, ₹200 fixed discount → monthly net ₹1300.</div><div className="modal-footer"><button className="secondary-btn" onClick={onClose}><CloseIcon /> Cancel</button><button className="primary-btn" onClick={() => onSubmit({ studentId:student.id, monthlyFee, discount })}><SaveIcon /> Save fee profile</button></div></div></div>;
+}
+
+function ReceiptPreview({ payment, student, onClose, onPrint, onShare }) {
+  const balanceAfter = Number(payment.balanceAfter || 0);
+  return <div className="receipt-overlay"><div className="receipt-modal"><div className="receipt-toolbar"><div><div className="card-kicker">BRANDED RECEIPT</div><h2>Receipt preview</h2><p className="section-caption">Landscape print-ready • Blue & White • stylized handwritten authorization.</p></div><button className="close-btn" onClick={onClose}><CloseIcon /></button></div><ReceiptCard payment={payment} student={student} balanceAfter={balanceAfter} /><div className="receipt-actions"><button className="primary-btn" onClick={() => onPrint(payment, student)}><PrinterIcon /> Print / Save PDF</button><button className="share-btn" onClick={() => onShare(payment, student)}><ShareIcon /> Share</button><button className="whatsapp-btn" onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(receiptShareText(payment, student))}`, '_blank')}><WhatsAppIcon /> WhatsApp</button><button className="secondary-btn" onClick={onClose}><CloseIcon /> Close</button></div></div></div>;
+}
+
+function ReceiptCard({ payment, student, balanceAfter }) {
+  return <div className="receipt-card" id="printable-receipt"><div className="receipt-topline"></div><div className="receipt-header"><img src="/assets/ezee-vision-logo.png" alt="EZEE VISION" /><div className="receipt-brand"><div className="receipt-institute">EZEE VISION CHAMPUA</div><div className="receipt-address">COACHING & LEARNING CENTRE</div><div className="receipt-title">FEE PAYMENT RECEIPT</div></div><div className="receipt-number"><span>Receipt No.</span><strong>{payment.receiptNo}</strong><span>{formatDate(payment.date)}</span></div></div><div className="receipt-meta-grid"><div><span>Student</span><strong>{student.name}</strong></div><div><span>Student ID</span><strong>{student.id}</strong></div><div><span>Guardian</span><strong>{student.guardian}</strong></div><div><span>Class / Batch</span><strong>{student.className} / {student.batch}</strong></div></div><table className="receipt-table"><thead><tr><th>Description</th><th>Monthly Fee</th><th>Discount</th><th>Net Fee</th><th>Paid Now</th><th>Balance</th></tr></thead><tbody><tr><td>{monthLabel(payment.month)} tuition fee</td><td>₹{money(payment.baseFee)}</td><td>₹{money(payment.discount)}</td><td>₹{money(payment.netFee)}</td><td className="receipt-paid">₹{money(payment.amount)}</td><td className={balanceAfter?'receipt-balance':''}>₹{money(balanceAfter)}</td></tr></tbody></table><div className="receipt-footer-grid"><div><span>Payment method</span><strong><PaymentMethodIcon method={payment.paymentMethod} /> {payment.paymentMethod}</strong><small>Payment date: {formatDate(payment.date)}</small></div><div><span>Amount in words</span><strong>{amountInWords(payment.amount)}</strong><small>{payment.note || 'Thank you for your payment.'}</small></div><div className="signature-block"><div className="signature-script">{payment.teacher}</div><div className="signature-line"></div><span>Authorized signature</span></div></div><div className="receipt-bottom"><span>Generated for {student.name}</span><strong>Made With ❤️ By Shahid Sir</strong></div></div>;
+}
+
+function feeSummaryForStudents(students, month, feeRecords) {
+  return students.map(student => {
+    const baseFee = Number(student.monthlyFee || CLASS_FEE_DEFAULTS[student.className] || 0);
+    const discount = Number(student.discount || 0);
+    const netFee = Math.max(0, baseFee - discount);
+    const transactions = feeRecords.filter(r => r.studentId === student.id && r.month === month).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+    const paid = transactions.reduce((n,r)=>n+Number(r.amount||0),0);
+    const balance = Math.max(0, netFee - paid);
+    const status = balance === 0 ? 'Paid' : paid > 0 ? 'Partial' : 'Pending';
+    return { student, baseFee, discount, netFee, paid, balance, status, transactions };
+  });
+}
+function receiptShareText(payment, student) { return `EZEE VISION CHAMPUA\nFee Payment Receipt ${payment.receiptNo}\nStudent: ${student.name}\nClass: ${student.className} • ${student.batch}\nMonth: ${monthLabel(payment.month)}\nPaid: ₹${money(payment.amount)}\nMethod: ${payment.paymentMethod}`; }
+function money(value) { return Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 }); }
+function amountInWords(value) { const n = Number(value || 0); if (n===0) return 'Zero rupees only'; return `${numberWords(n)} rupees only`; }
+function numberWords(n) { const ones=['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten','Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen']; const tens=['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety']; const two=(x)=>x<20?ones[x]:tens[Math.floor(x/10)]+(x%10?' '+ones[x%10]:''); if(n<20)return ones[n]; if(n<100)return two(n); if(n<1000)return `${ones[Math.floor(n/100)]} Hundred${n%100?' '+two(n%100):''}`; if(n<100000)return `${two(Math.floor(n/1000))} Thousand${n%1000?' '+numberWords(n%1000):''}`; if(n<10000000)return `${two(Math.floor(n/100000))} Lakh${n%100000?' '+numberWords(n%100000):''}`; return `${two(Math.floor(n/10000000))} Crore${n%10000000?' '+numberWords(n%10000000):''}`; }
+function WalletIcon(){return <Svg><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5V19a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V6.5Z"/><path d="M4 7h14.5A1.5 1.5 0 0 1 20 8.5v3.3H15a2.5 2.5 0 0 0 0 5h5"/><circle cx="15" cy="14.3" r=".7" fill="currentColor" stroke="none"/></Svg>}
+function PaymentMethodIcon({ method }) { if(method==='UPI') return <UpiIcon />; if(method==='Bank Transfer') return <BankIcon />; if(method==='Other') return <MoreIcon />; return <CashIcon />; }
+function CashIcon(){return <Svg><rect x="3" y="7" width="18" height="10" rx="2"/><circle cx="12" cy="12" r="2.4"/><path d="M6 10h.01M18 14h.01"/></Svg>}
+function UpiIcon(){return <Svg><path d="M7 3.8h4.5l-2 6.4h3l-5.2 9.9 1.5-7H6l1-9.3Z"/><path d="M14.5 6h4v12h-7"/></Svg>}
+function BankIcon(){return <Svg><path d="m4 9 8-4 8 4M5 10h14M6 11v7M10 11v7M14 11v7M18 11v7M4 20h16"/></Svg>}
+
+function ModulePlaceholder({ screen, onBack }) { const data = { tests: ['Test Center', 'Create tests, manage attempts and results.', ClipboardIcon] }; const [title, subtitle, Icon] = data[screen] || ['Module','Module coming next.', SparklesIcon]; return <section className="module-page"><button className="back-btn" onClick={onBack}><ChevronLeftIcon /> Back to dashboard</button><div className="module-icon"><Icon /></div><div className="eyebrow"><span className="dot" /> NEXT PHASE</div><h1>{title}</h1><p>{subtitle}</p><div className="coming-card"><strong>Phase 4 Fee Manager is now live.</strong><span>{title} remains intentionally scoped for the next module build.</span></div></section>; }
 function Profile({ onLogout }) { return <section className="module-page"><div className="profile-avatar">SS</div><div className="eyebrow"><span className="dot" /> ADMIN / TEACHER</div><h1>Shahid Sir</h1><p>Your app profile and workspace controls.</p><div className="profile-list"><InfoRow label="Institute" value="EZEE VISION CHAMPUA" /><InfoRow label="Role" value="Admin / Teacher" /><InfoRow label="Interface" value="App-first • APK-ready" /></div><button className="secondary-btn full" onClick={onLogout}><LogOutIcon /> Sign out</button><div className="watermark">Made With ❤️ By Shahid Sir</div></section>; }
 
 function PrintReport({ report }) {
