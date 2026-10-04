@@ -7,7 +7,7 @@ import { subscribeAttendance, saveAttendanceCloud } from './services/attendance'
 import { subscribeFeeRecords, saveFeeRecordCloud, deleteFeeRecordsForStudent } from './services/fees';
 import { subscribeTests, saveTestCloud, deleteTestCloud, getTestCloud } from './services/tests';
 import { subscribeQuestionBank, saveQuestionBankCloud, deleteQuestionBankCloud } from './services/questionBank';
-import { subscribeTestAttempts, saveTestAttemptCloud, savePublicScore, getPublicScores } from './services/testAttempts';
+import { subscribeTestAttempts, submitTestSecurely } from './services/testAttempts';
 
 const CLASS_OPTIONS = ['Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10'];
 const CLASS_FEE_DEFAULTS = { 'Class 4': 1000, 'Class 5': 1000, 'Class 6': 1000, 'Class 7': 1200, 'Class 8': 1200, 'Class 9': 1500, 'Class 10': 1500 };
@@ -264,33 +264,15 @@ function App() {
       (error) => console.error('Question bank sync error', error)
     );
     const unsubAttempts = subscribeTestAttempts(
-      async (nextAttempts) => {
-        const local = loadStoredArray('ezee_test_attempts');
-        const migrationKey = 'ezee_test_attempts_cloud_migrated_v1';
-        if (!nextAttempts.length && local.length && !localStorage.getItem(migrationKey)) {
-          try {
-            await Promise.all(local.map(attempt => saveTestAttemptCloud(attempt, authState.user.uid)));
-            localStorage.setItem(migrationKey, '1');
-          } catch (error) {
-            console.error('Test attempts migration error', error);
-          }
-        }
-        setTestAttempts(current => (!nextAttempts.length && local.length && !localStorage.getItem(migrationKey) ? current : nextAttempts));
+      (nextAttempts) => {
+        // Attempts are written only by the secure Cloud Function. Existing local attempts remain local until a deliberate admin migration is added.
+        setTestAttempts(nextAttempts);
       },
       (error) => console.error('Test attempts sync error', error)
     );
     return () => { unsubTests(); unsubBank(); unsubAttempts(); };
   }, [authState.status, authState.user?.uid]);
 
-  const saveAttemptToCloud = async (attempt) => {
-    setTestAttempts(prev => [attempt, ...prev]);
-    try {
-      await saveTestAttemptCloud(attempt, authState.user?.uid || null);
-    } catch (error) {
-      console.error('Test attempt save error', error);
-      window.alert('Result generated, but cloud attempt saving failed. Please check Firestore Rules.');
-    }
-  };
 
   const login = async (email, password) => loginWithEmail(email, password);
   const logout = async () => { await logoutUser(); setScreen('home'); };
@@ -341,7 +323,7 @@ function App() {
   const updateAttendancePrefs = (patch) => setAttendancePrefs(prev => ({ ...prev, ...patch }));
 
   const studentTestId = new URLSearchParams(window.location.search).get('test');
-  if (studentTestId) return <StudentTestPortal testId={studentTestId} tests={tests} testAttempts={testAttempts} onAttemptComplete={saveAttemptToCloud} />;
+  if (studentTestId) return <StudentTestPortal testId={studentTestId} tests={tests} />;
   if (authState.status === 'loading') return <AuthLoading dark={dark} setDark={setDark} />;
   if (authState.status === 'signedOut') return <Login onLogin={login} dark={dark} setDark={setDark} />;
   if (authState.status === 'blocked') return <AccessBlocked error={authState.error} email={authState.user?.email} onLogout={logout} dark={dark} setDark={setDark} />;
@@ -851,6 +833,7 @@ function TestBuilderModal({ tests, setTests, questionBank, setQuestionBank, edit
   const existing = editingTestId ? tests.find(t=>t.id===editingTestId) : null;
   const initialQuestion = seedQuestion ? normalizeQuestion({...seedQuestion}) : blankQuestion();
   const [builder, setBuilder] = useState(() => existing ? normalizeTest(existing) : { id:createId('test'), title:'', type:'Practice Test', className:'Class 10', subject:'SST', topic:'', durationMinutes:30, negativeEnabled:false, negativeValue:0.25, randomize:true, liveStart:'', liveEnd:'', questions:[initialQuestion] });
+  useEffect(()=>{ let alive=true; if(existing?.id){ getTestCloud(existing.id).then(full=>{ if(alive&&full) setBuilder(normalizeTest(full)); }).catch(()=>{}); } return ()=>{alive=false;}; },[existing?.id]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [errors,setErrors]=useState([]);
   const q = builder.questions[activeIndex] || builder.questions[0];
@@ -878,7 +861,7 @@ function TestBuilderModal({ tests, setTests, questionBank, setQuestionBank, edit
 
 function QuestionBankPicker({ questionBank, onClose, onPick }) { return <div className="modal-backdrop"><div className="modal-sheet small-sheet"><div className="modal-head"><div><div className="card-kicker">QUESTION BANK</div><h2>Add saved question</h2></div><button className="close-btn" onClick={onClose}><CloseIcon /></button></div>{questionBank.length?<div className="bank-picker-list">{questionBank.map(q=><button className="bank-picker-row" key={q.id} onClick={()=>onPick(q)}><span className="question-type-pill">{q.type}</span><div><strong>{q.prompt}</strong><span>{q.marks} marks • {q.subject||'General'}</span></div><PlusIcon /></button>)}</div>:<div className="empty-state inline"><div className="empty-icon"><LibraryIcon /></div><h3>No saved questions</h3><p>Save questions to the bank from the test builder first.</p></div>}</div></div>; }
 
-function StudentTestPortal({ testId, tests, testAttempts, onAttemptComplete }) {
+function StudentTestPortal({ testId, tests }) {
   const localTest = tests.find(t => t.id === testId) || null;
   const [test,setTest] = useState(localTest);
   const [loading,setLoading] = useState(true);
@@ -949,20 +932,13 @@ function StudentTestPortal({ testId, tests, testAttempts, onAttemptComplete }) {
   };
   const submitTest=async(auto=false)=>{
     if(phase!=='test'||!questions.length)return;
-    const computed=evaluateTest(test,questions,answers);
-    const attempt={id:createId('attempt'),testId:test.id,studentName:student.name.trim(),studentId:student.id.trim(),submittedAt:new Date().toISOString(),startedAt:new Date(startedAt||Date.now()).toISOString(),score:computed.score,totalMarks:computed.totalMarks,percentage:computed.percentage,correct:computed.correct,incorrect:computed.incorrect,unattempted:computed.unattempted,manualReview:computed.manualReview,autoSubmitted:auto,answers};
-    const higherLocal=(testAttempts||[]).filter(a=>a.testId===test.id&&Number(a.score||0)>Number(computed.score||0)).length;
-    let rank=higherLocal+1;
     try {
-      await onAttemptComplete(attempt);
-      await savePublicScore(test.id, attempt);
-      const publicScores=await getPublicScores(test.id);
-      rank=publicScores.filter(score=>Number(score.score||0)>Number(computed.score||0)).length+1;
+      const computed=await submitTestSecurely({testId:test.id,studentName:student.name.trim(),studentId:student.id.trim(),answers,startedAt:new Date(startedAt||Date.now()).toISOString(),autoSubmitted:auto});
+      setResult(computed);setPhase('result');
     } catch(error) {
-      console.error('Student result cloud sync error', error);
+      console.error('Secure result submission error', error);
+      alert('Result could not be submitted securely. Please check your internet connection and try again.');
     }
-    computed.rank=rank;
-    setResult(computed);setPhase('result');
     if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});setFullscreen(false);
   };
   const q=questions[index];
