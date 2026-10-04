@@ -1,60 +1,12 @@
-import {
-  addDoc,
-  collection,
-  getDocs,
-  onSnapshot,
-  serverTimestamp,
-} from 'firebase/firestore';
+import { collection, onSnapshot } from 'firebase/firestore';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import { db } from '../firebase';
-
-const attemptsRef = collection(db, 'testAttempts');
-
-function clean(value) {
-  if (Array.isArray(value)) return value.map(clean);
-  if (value && typeof value.toDate === 'function') return value.toDate().toISOString();
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, clean(v)]));
-  return value;
-}
-
-export function subscribeTestAttempts(onData, onError) {
-  return onSnapshot(attemptsRef, (snapshot) => {
-    const next = snapshot.docs
-      .map((item) => clean({ id: item.id, ...item.data() }))
-      .sort((a, b) => String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')));
-    onData(next);
-  }, onError);
-}
-
-export async function saveTestAttemptCloud(attempt, uid = null) {
-  if (!attempt?.testId) throw new Error('Test id is required.');
-  const payload = {
-    ...attempt,
-    createdBy: attempt.createdBy || uid || null,
-    submittedAt: attempt.submittedAt || new Date().toISOString(),
-    savedAt: serverTimestamp(),
-    portalSubmission: true,
-  };
-  const ref = await addDoc(attemptsRef, payload);
-  return { id: ref.id, ...attempt };
-}
-
-export async function savePublicScore(testId, result) {
-  if (!testId) throw new Error('Test id is required.');
-  const publicScoresRef = collection(db, 'tests', testId, 'publicScores');
-  const ref = await addDoc(publicScoresRef, {
-    score: Number(result.score || 0),
-    totalMarks: Number(result.totalMarks || 0),
-    percentage: Number(result.percentage || 0),
-    submittedAt: result.submittedAt || new Date().toISOString(),
-  });
-  return ref.id;
-}
-
-export async function getPublicScores(testId) {
-  if (!testId) return [];
-  const ref = collection(db, 'tests', testId, 'publicScores');
-  const snapshot = await getDocs(ref);
-  return snapshot.docs
-    .map((item) => clean({ id: item.id, ...item.data() }))
-    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || String(a.submittedAt || '').localeCompare(String(b.submittedAt || '')));
-}
+const attemptsRef=collection(db,'testAttempts');
+const functions=getFunctions(undefined,'us-central1');
+function clean(value){if(Array.isArray(value))return value.map(clean);if(value&&typeof value.toDate==='function')return value.toDate().toISOString();if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,clean(v)]));return value;}
+export function subscribeTestAttempts(onData,onError){return onSnapshot(attemptsRef,snapshot=>onData(snapshot.docs.map(item=>clean({id:item.id,...item.data()})).sort((a,b)=>String(b.submittedAt||'').localeCompare(String(a.submittedAt||'')))),onError);}
+export async function submitTestSecurely(payload){const fn=httpsCallable(functions,'submitTest');const result=await fn(payload);return result.data;}
+// Deprecated client-side write helpers are intentionally removed. Results must be server-evaluated.
+export async function saveTestAttemptCloud(){throw new Error('Use submitTestSecurely().');}
+export async function savePublicScore(){throw new Error('Public scores are written by the secure function.');}
+export async function getPublicScores(){return [];}
