@@ -21,6 +21,12 @@ service cloud.firestore {
         && (myProfile().data.role == 'admin' || myProfile().data.role == 'teacher');
     }
 
+    function publishedTest(testId) {
+      return exists(/databases/$(database)/documents/tests/$(testId))
+        && get(/databases/$(database)/documents/tests/$(testId)).data.published == true
+        && get(/databases/$(database)/documents/tests/$(testId)).data.publicAccess == true;
+    }
+
     match /users/{uid} {
       allow read: if signedIn() && request.auth.uid == uid;
       allow create: if isAdmin();
@@ -39,9 +45,32 @@ service cloud.firestore {
       allow read, create, update, delete: if isTeacherOrAdmin();
     }
 
-    // Keep remaining modules locked until each one is migrated.
-    match /tests/{id} { allow read, write: if false; }
-    match /questionBank/{id} { allow read, write: if false; }
-    match /testAttempts/{id} { allow read, write: if false; }
+    match /tests/{id} {
+      allow get: if (isTeacherOrAdmin()) || (!signedIn() && resource.data.published == true && resource.data.publicAccess == true);
+      allow list: if isTeacherOrAdmin();
+      allow create, update, delete: if isTeacherOrAdmin();
+
+      match /publicScores/{scoreId} {
+        allow read: if publishedTest(id);
+        allow create: if publishedTest(id)
+          && request.resource.data.keys().hasOnly(['score','totalMarks','percentage','submittedAt'])
+          && request.resource.data.score is number
+          && request.resource.data.totalMarks is number
+          && request.resource.data.percentage is number;
+        allow update, delete: if false;
+      }
+    }
+
+    match /questionBank/{id} {
+      allow read, create, update, delete: if isTeacherOrAdmin();
+    }
+
+    match /testAttempts/{id} {
+      allow read, update, delete: if isTeacherOrAdmin();
+      allow create: if isTeacherOrAdmin()
+        || (!signedIn()
+            && request.resource.data.portalSubmission == true
+            && publishedTest(request.resource.data.testId));
+    }
   }
 }
